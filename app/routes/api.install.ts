@@ -1,17 +1,40 @@
 // app/routes/api.install.ts
-// Endpoint interno do App Shopify que recebe os dados da loja
-// e os envia para a API Central de Assinaturas
-
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import { installShopOnApi } from "../lib/api.client";
+
+const API_BASE_URL = process.env.API_SUBSCRIPTION_URL || "";
+const API_KEY = process.env.API_KEY || "";
+
+async function installShopOnApi(data: {
+    shopifyShopId?: string;
+    name: string;
+    domain: string;
+    accessToken: string;
+    scopes: string;
+}) {
+    const url = `${API_BASE_URL}/api/shop/install`;
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": API_KEY,
+        },
+        body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`API Error ${response.status}: ${errorText}`);
+    }
+
+    return response.json();
+}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
     const { session } = await authenticate.admin(request);
     const { shop, accessToken, scope } = session;
 
     try {
-        // Busca informações da loja no Shopify Admin
         const response = await fetch(
             `https://${shop}/admin/api/2024-07/shop.json`,
             {
@@ -30,7 +53,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const shopName = shopData.shop?.name || shop;
         const shopifyShopId = shopData.shop?.id?.toString();
 
-        // Envia para a API Central de Assinaturas
         const result = await installShopOnApi({
             shopifyShopId,
             name: shopName,
@@ -41,7 +63,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         return Response.json({ success: true, data: result });
     } catch (error) {
-        console.error("[api.install] Erro ao sincronizar com API Central:", error);
+        console.error("[api.install] Erro:", error);
         return Response.json(
             { success: false, error: String(error) },
             { status: 500 }
