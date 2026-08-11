@@ -1,4 +1,3 @@
-// api/index.ts
 import { createRequestHandler } from "@react-router/node";
 
 // @ts-ignore

@@ -1,15 +1,16 @@
 {
-    "buildCommand": "npm run build",
-    "outputDirectory": "build/client",
-    "framework": null,
-    "installCommand": "npm install"
-}
-
-{
-    "rewrites": [
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index" }
+  ],
+  "headers": [
+    {
+      "source": "/assets/(.*)",
+      "headers": [
         {
-            "source": "/(.*)",
-            "destination": "/api/index"
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
         }
-    ]
+      ]
+    }
+  ]
 }
