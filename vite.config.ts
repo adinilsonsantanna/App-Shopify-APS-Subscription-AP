@@ -40,9 +40,10 @@ export default defineConfig({
     fs: { allow: ["app", "node_modules"] },
   },
   plugins: [
-    reactRouter(),
+    reactRouter({
+      presets: [vercelPreset()],
+    }),
     tsconfigPaths(),
-    vercelPreset(), // ← ADICIONAR ISSO
   ],
   build: { assetsInlineLimit: 0 },
   optimizeDeps: { include: ["@shopify/app-bridge-react"] },
