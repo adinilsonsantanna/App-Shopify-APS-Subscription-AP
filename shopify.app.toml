@@ -2,7 +2,7 @@
 
 client_id = "96b7a115719767df0ae733f73488cba5"
 name = "APS Subscription API"
-application_url = "https://app-shopify-aps-subscription-gnktba2wn.vercel.app"
+application_url = "https://app-shopify-aps-subscription-ap.vercel.app"
 embedded = true
 
 [access_scopes]
@@ -48,9 +48,9 @@ api_version = "2026-07"
 
 [auth]
 redirect_urls = [
-  "https://app-shopify-aps-subscription-gnktba2wn.vercel.app/auth/callback",
-  "https://app-shopify-aps-subscription-gnktba2wn.vercel.app/auth/shopify/callback",
-  "https://app-shopify-aps-subscription-gnktba2wn.vercel.app/api/auth/callback"
+  "https://app-shopify-aps-subscription-ap.vercel.app/auth/callback",
+  "https://app-shopify-aps-subscription-ap.vercel.app/auth/shopify/callback",
+  "https://app-shopify-aps-subscription-ap.vercel.app/api/auth/callback"
 ]
 
 [build]
