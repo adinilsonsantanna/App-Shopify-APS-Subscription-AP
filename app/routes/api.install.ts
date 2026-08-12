@@ -34,9 +34,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const { session } = await authenticate.admin(request);
     const { shop, accessToken, scope } = session;
 
+    if (!accessToken) {
+        throw new Error("Shopify access token não disponível na sessão.");
+    }
+
     try {
         const response = await fetch(
-            `https://${shop}/admin/api/2024-07/shop.json`,
+            `https://${shop}/admin/api/2026-07/shop.json`,
             {
                 headers: {
                     "X-Shopify-Access-Token": accessToken,

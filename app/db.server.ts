@@ -1,10 +1,5 @@
-import { Pool, neonConfig } from "@neondatabase/serverless";
 import { PrismaNeon } from "@prisma/adapter-neon";
 import { PrismaClient } from "@prisma/client";
-import ws from "ws";
-
-// Necessário para o Neon funcionar no ambiente Node.js
-neonConfig.webSocketConstructor = ws;
 
 declare global {
   // eslint-disable-next-line no-var
@@ -18,9 +13,13 @@ if (!connectionString) {
 }
 
 const createPrismaClient = () => {
-  const pool = new Pool({ connectionString });
-  const adapter = new PrismaNeon(pool);
-  return new PrismaClient({ adapter });
+  const adapter = new PrismaNeon({
+    connectionString,
+  });
+
+  return new PrismaClient({
+    adapter,
+  });
 };
 
 const prisma = global.prismaGlobal ?? createPrismaClient();

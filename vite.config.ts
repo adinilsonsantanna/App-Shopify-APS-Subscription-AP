@@ -40,9 +40,7 @@ export default defineConfig({
     fs: { allow: ["app", "node_modules"] },
   },
   plugins: [
-    reactRouter({
-      presets: [vercelPreset()],
-    }),
+    reactRouter(),
     tsconfigPaths(),
   ],
   build: { assetsInlineLimit: 0 },
