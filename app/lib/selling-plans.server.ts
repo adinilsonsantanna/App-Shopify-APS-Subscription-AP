@@ -166,7 +166,8 @@ function normalizeShopifyId(id: string | null | undefined) {
 function isOwnedApsGroup(group: RawGroup, currentAppId: string) {
   return (
     group.merchantCode === APS_MERCHANT_CODE &&
-    normalizeShopifyId(group.appId) === normalizeShopifyId(currentAppId)
+    (!group.appId ||
+      normalizeShopifyId(group.appId) === normalizeShopifyId(currentAppId))
   );
 }
 
