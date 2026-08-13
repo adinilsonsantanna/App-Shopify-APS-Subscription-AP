@@ -73,7 +73,10 @@ function PlanForm({ plan, groupId, onCancel }: { plan?: SellingPlan; groupId?: s
         </s-select>
         <s-number-field label="Intervalo" name="intervalCount" value={String(plan?.intervalCount ?? 1)} min={1} step={1} required />
         <s-number-field label="Desconto (%)" name="discountPercentage" value={String(plan?.discountPercentage ?? 20)} min={0} max={100} step={0.01} required />
-        <s-button-group><s-button type="submit" variant="primary">{plan ? "Salvar alterações" : "Criar Selling Plan"}</s-button><s-button type="button" onClick={onCancel}>Cancelar</s-button></s-button-group>
+        <s-stack direction="inline" gap="base">
+          <s-button type="submit" variant="primary">{plan ? "Salvar alterações" : "Criar Selling Plan"}</s-button>
+          <s-button type="button" variant="secondary" onClick={onCancel}>Cancelar</s-button>
+        </s-stack>
       </s-stack>
     </Form>
   );
@@ -107,13 +110,13 @@ export default function ProductSellingPlans() {
                   <s-text>Cobrança: a cada {plan.intervalCount} {labels[plan.interval].toLowerCase()}(s)</s-text>
                   <s-text>Entrega: a cada {plan.deliveryIntervalCount} {labels[plan.deliveryInterval].toLowerCase()}(s)</s-text>
                   <s-text>Desconto: {plan.discountPercentage}%</s-text>
-                  <s-button-group>
+                  <s-stack direction="inline" gap="base">
                     <s-button disabled={busy} onClick={() => { setCreating(false); setEditing({ groupId: group.id, plan }); }}>Editar</s-button>
                     <Form method="post" onSubmit={(event) => { if (!confirm(`Excluir o plano “${plan.name}”?`)) event.preventDefault(); }}>
                       <input type="hidden" name="intent" value="delete" /><input type="hidden" name="groupId" value={group.id} /><input type="hidden" name="sellingPlanId" value={plan.id} />
                       <s-button type="submit" tone="critical" disabled={busy}>Excluir</s-button>
                     </Form>
-                  </s-button-group>
+                  </s-stack>
                 </s-stack>
               </s-box>
             ))}
