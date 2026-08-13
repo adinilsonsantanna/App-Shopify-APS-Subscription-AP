@@ -397,11 +397,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         for (
             const line of lines
         ) {
-            const productVariantId =
+            const rawProductVariantId =
                 String(
                     line.productVariantId ||
                     ""
                 ).trim();
+
+            if (!rawProductVariantId) {
+                console.warn(
+                    "[Shopify App] Linha ignorada: productVariantId ausente"
+                );
+
+                continue;
+            }
+
+            const productVariantId =
+                rawProductVariantId.startsWith(
+                    "gid://shopify/ProductVariant/"
+                )
+                    ? rawProductVariantId
+                    : `gid://shopify/ProductVariant/${rawProductVariantId}`;
 
             const quantity =
                 Number(
@@ -412,16 +427,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                 String(
                     line.currentPrice || "0"
                 );
-
-            if (
-                !productVariantId
-            ) {
-                console.warn(
-                    "[Shopify App] Linha ignorada: productVariantId ausente"
-                );
-
-                continue;
-            }
 
             console.log(
                 "[Shopify App] Adicionando linha ao draft:",
