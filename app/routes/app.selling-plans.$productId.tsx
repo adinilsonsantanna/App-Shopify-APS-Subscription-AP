@@ -94,6 +94,9 @@ export default function ProductSellingPlans() {
     if (actionData?.ok) { shopify.toast.show(actionData.message ?? "Operação concluída."); setEditing(null); setCreating(false); }
   }, [actionData, shopify]);
   const busy = navigation.state !== "idle";
+  const plans = product.groups.flatMap((group) =>
+    group.sellingPlans.map((plan) => ({ group, plan })),
+  );
 
   return (
     <s-page heading={product.title}>
@@ -102,12 +105,13 @@ export default function ProductSellingPlans() {
       {actionData && !actionData.ok && <s-banner heading="Não foi possível concluir" tone="critical">{actionData.error}</s-banner>}
       {(creating || editing) && <s-section heading={editing ? `Editar ${editing.plan.name}` : "Criar Selling Plan"}><s-paragraph>Produto: {product.title}</s-paragraph><PlanForm plan={editing?.plan} groupId={editing?.groupId} onCancel={() => { setEditing(null); setCreating(false); }} /></s-section>}
       <s-section heading="Selling Plans">
-        {product.groups.flatMap((group) => group.sellingPlans.map((plan) => ({ group, plan }))).length === 0 ? <s-paragraph>Nenhum Selling Plan APS associado a este produto.</s-paragraph> : (
+        {plans.length === 0 ? <s-paragraph>Nenhum Selling Plan APS associado a este produto.</s-paragraph> : (
           <s-stack direction="block" gap="base">
-            {product.groups.flatMap((group) => group.sellingPlans.map((plan) => ({ group, plan }))).map(({ group, plan }) => (
+            {plans.map(({ group, plan }, index) => (
               <s-box key={plan.id} padding="base" border="base" borderRadius="base">
                 <s-stack direction="block" gap="small">
-                  <s-heading>{plan.name}</s-heading>
+                  <s-heading>Plano {index + 1}</s-heading>
+                  <s-text type="strong">{plan.name}</s-text>
                   <s-text>Cobrança: a cada {plan.intervalCount} {labels[plan.interval].toLowerCase()}(s)</s-text>
                   <s-text>Entrega: a cada {plan.deliveryIntervalCount} {labels[plan.deliveryInterval].toLowerCase()}(s)</s-text>
                   <s-text>Desconto: {plan.discountPercentage}%</s-text>
