@@ -83,8 +83,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         // VALIDAR DADOS PRINCIPAIS
         // ============================================================
 
-        const customerId =
+        const rawCustomerId =
             String(input.customerId || "").trim();
+
+        const customerId =
+            rawCustomerId.startsWith("gid://shopify/Customer/")
+                ? rawCustomerId
+                : `gid://shopify/Customer/${rawCustomerId}`;
 
         const currencyCode =
             String(
@@ -196,14 +201,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         //
         // ============================================================
 
+        const billingPolicy = {
+            interval: String(
+                input.billingPolicy?.interval || "MONTH"
+            ).toUpperCase(),
+            intervalCount: Number(
+                input.billingPolicy?.intervalCount || 1
+            ),
+        };
+
+        const deliveryPolicy = {
+            interval: String(
+                input.deliveryPolicy?.interval || "MONTH"
+            ).toUpperCase(),
+            intervalCount: Number(
+                input.deliveryPolicy?.intervalCount || 1
+            ),
+        };
+
         const contract: Record<string, any> = {
             status: "ACTIVE",
 
-            billingPolicy:
-                input.billingPolicy,
+            billingPolicy,
 
-            deliveryPolicy:
-                input.deliveryPolicy,
+            deliveryPolicy,
         };
 
         // ============================================================
