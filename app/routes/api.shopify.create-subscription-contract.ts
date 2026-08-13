@@ -70,7 +70,47 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         ) {
             return Response.json(
                 {
-                    error: "Subscription contract input não informado",
+                    error:
+                        "Subscription contract input não informado",
+                },
+                {
+                    status: 400,
+                }
+            );
+        }
+
+        // ============================================================
+        // VALIDAR DADOS PRINCIPAIS
+        // ============================================================
+
+        const customerId =
+            String(input.customerId || "").trim();
+
+        const currencyCode =
+            String(
+                input.currencyCode || "BRL"
+            ).toUpperCase();
+
+        const nextBillingDate =
+            input.nextBillingDate;
+
+        if (!customerId) {
+            return Response.json(
+                {
+                    error:
+                        "customerId não informado",
+                },
+                {
+                    status: 400,
+                }
+            );
+        }
+
+        if (!nextBillingDate) {
+            return Response.json(
+                {
+                    error:
+                        "nextBillingDate não informado",
                 },
                 {
                     status: 400,
@@ -82,12 +122,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         // SHOPIFY ADMIN OFFLINE
         // ============================================================
         //
-        // IMPORTANTE:
-        //
-        // Não usamos accessToken da API Central.
-        //
-        // O App Shopify recupera a sessão offline da loja e
-        // utiliza o mecanismo oficial de renovação dos tokens.
+        // O APP Shopify recupera a sessão offline da loja.
         //
         // ============================================================
 
@@ -126,59 +161,111 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             shop
         );
 
+        console.log(
+            "[Shopify App] Dados recebidos:",
+            JSON.stringify(
+                {
+                    customerId,
+                    currencyCode,
+                    nextBillingDate,
+                    billingPolicy:
+                        input.billingPolicy,
+                    deliveryPolicy:
+                        input.deliveryPolicy,
+                    lines:
+                        input.lines,
+                },
+                null,
+                2
+            )
+        );
+
         // ============================================================
-        // GRAPHQL
+        // PREPARAR CONTRACT
+        // ============================================================
+        //
+        // Shopify 2026-07:
+        //
+        // billingPolicy e deliveryPolicy pertencem
+        // ao objeto "contract".
+        //
+        // As linhas NÃO são enviadas aqui.
+        //
+        // Elas serão adicionadas posteriormente através
+        // de subscriptionDraftLineAdd.
+        //
         // ============================================================
 
-        const response =
+        const contract: Record<string, any> = {
+            status: "ACTIVE",
+
+            billingPolicy:
+                input.billingPolicy,
+
+            deliveryPolicy:
+                input.deliveryPolicy,
+        };
+
+        // ============================================================
+        // GRAPHQL — CREATE DRAFT
+        // ============================================================
+
+        const createResponse =
             await admin.graphql(
                 `#graphql
-          mutation subscriptionContractCreate(
-            $input: SubscriptionContractInput!
-          ) {
-            subscriptionContractCreate(
-              input: $input
-            ) {
-              contract {
-                id
-                status
-                nextBillingDate
-              }
+                mutation createSubscriptionContract(
+                    $input: SubscriptionContractCreateInput!
+                ) {
+                    subscriptionContractCreate(
+                        input: $input
+                    ) {
+                        draft {
+                            id
+                            status
+                            nextBillingDate
+                        }
 
-              userErrors {
-                field
-                message
-              }
-            }
-          }
-        `,
+                        userErrors {
+                            field
+                            message
+                        }
+                    }
+                }
+                `,
                 {
                     variables: {
-                        input,
+                        input: {
+                            customerId,
+                            currencyCode,
+                            nextBillingDate,
+                            contract,
+                        },
                     },
                 }
             );
 
-        const result =
-            await response.json();
+        const createResult =
+            await createResponse.json();
 
         // ============================================================
         // ERRO HTTP
         // ============================================================
 
-        if (!response.ok) {
+        if (!createResponse.ok) {
             console.error(
                 "[Shopify App] GraphQL HTTP error:",
-                response.status,
-                result
+                createResponse.status,
+                createResult
             );
 
             return Response.json(
                 {
                     error:
                         "Shopify GraphQL HTTP error",
-                    status: response.status,
-                    details: result,
+                    status:
+                        createResponse.status,
+                    details:
+                        createResult,
                 },
                 {
                     status: 502,
@@ -191,19 +278,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         // ============================================================
 
         if (
-            result.errors &&
-            result.errors.length > 0
+            createResult.errors &&
+            createResult.errors.length > 0
         ) {
             console.error(
                 "[Shopify App] GraphQL errors:",
-                result.errors
+                createResult.errors
             );
 
             return Response.json(
                 {
                     error:
                         "Shopify GraphQL error",
-                    details: result.errors,
+                    details:
+                        createResult.errors,
                 },
                 {
                     status: 502,
@@ -215,22 +303,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         // USER ERRORS
         // ============================================================
 
-        const userErrors =
-            result.data
+        const createUserErrors =
+            createResult
+                .data
                 ?.subscriptionContractCreate
                 ?.userErrors || [];
 
-        if (userErrors.length > 0) {
+        if (
+            createUserErrors.length > 0
+        ) {
             console.error(
                 "[Shopify App] subscriptionContractCreate userErrors:",
-                userErrors
+                createUserErrors
             );
 
             return Response.json(
                 {
                     error:
                         "Shopify subscriptionContractCreate error",
-                    details: userErrors,
+                    details:
+                        createUserErrors,
                 },
                 {
                     status: 422,
@@ -239,25 +331,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
 
         // ============================================================
-        // CONTRATO
+        // DRAFT
         // ============================================================
 
-        const contract =
-            result.data
+        const draft =
+            createResult
+                .data
                 ?.subscriptionContractCreate
-                ?.contract;
+                ?.draft;
 
-        if (!contract?.id) {
+        if (!draft?.id) {
             console.error(
-                "[Shopify App] Shopify não retornou ID do contrato:",
-                result
+                "[Shopify App] Shopify não retornou ID do draft:",
+                createResult
             );
 
             return Response.json(
                 {
                     error:
-                        "Shopify não retornou o ID do contrato",
-                    details: result,
+                        "Shopify não retornou o ID do subscription draft",
+                    details:
+                        createResult,
                 },
                 {
                     status: 502,
@@ -266,13 +360,209 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
 
         console.log(
-            "[Shopify App] ✅ Subscription contract criado:",
-            contract.id
+            "[Shopify App] ✅ Subscription draft criado:",
+            draft.id
+        );
+
+        // ============================================================
+        // ADICIONAR LINHAS
+        // ============================================================
+
+        const lines =
+            Array.isArray(input.lines)
+                ? input.lines
+                : [];
+
+        for (
+            const line of lines
+        ) {
+            const productVariantId =
+                String(
+                    line.productVariantId ||
+                    ""
+                ).trim();
+
+            const quantity =
+                Number(
+                    line.quantity || 1
+                );
+
+            const currentPrice =
+                String(
+                    line.currentPrice || "0"
+                );
+
+            if (
+                !productVariantId
+            ) {
+                console.warn(
+                    "[Shopify App] Linha ignorada: productVariantId ausente"
+                );
+
+                continue;
+            }
+
+            console.log(
+                "[Shopify App] Adicionando linha ao draft:",
+                {
+                    productVariantId,
+                    quantity,
+                    currentPrice,
+                }
+            );
+
+            const lineResponse =
+                await admin.graphql(
+                    `#graphql
+                    mutation subscriptionDraftLineAdd(
+                        $draftId: ID!
+                        $input: SubscriptionLineInput!
+                    ) {
+                        subscriptionDraftLineAdd(
+                            draftId: $draftId
+                            input: $input
+                        ) {
+                            draft {
+                                id
+                            }
+
+                            lineAdded {
+                                id
+                                quantity
+                                currentPrice {
+                                    amount
+                                    currencyCode
+                                }
+                            }
+
+                            userErrors {
+                                field
+                                message
+                            }
+                        }
+                    }
+                    `,
+                    {
+                        variables: {
+                            draftId:
+                                draft.id,
+
+                            input: {
+                                productVariantId,
+                                quantity,
+                                currentPrice,
+                            },
+                        },
+                    }
+                );
+
+            const lineResult =
+                await lineResponse.json();
+
+            // ========================================================
+            // GRAPHQL ERROR
+            // ========================================================
+
+            if (
+                !lineResponse.ok ||
+                lineResult.errors?.length
+            ) {
+                console.error(
+                    "[Shopify App] Erro GraphQL ao adicionar linha:",
+                    lineResult
+                );
+
+                return Response.json(
+                    {
+                        error:
+                            "Erro Shopify ao adicionar linha da assinatura",
+                        details:
+                            lineResult,
+                        draftId:
+                            draft.id,
+                    },
+                    {
+                        status: 502,
+                    }
+                );
+            }
+
+            // ========================================================
+            // USER ERRORS
+            // ========================================================
+
+            const lineUserErrors =
+                lineResult
+                    .data
+                    ?.subscriptionDraftLineAdd
+                    ?.userErrors || [];
+
+            if (
+                lineUserErrors.length > 0
+            ) {
+                console.error(
+                    "[Shopify App] subscriptionDraftLineAdd userErrors:",
+                    lineUserErrors
+                );
+
+                return Response.json(
+                    {
+                        error:
+                            "Erro ao adicionar linha da assinatura",
+                        details:
+                            lineUserErrors,
+                        draftId:
+                            draft.id,
+                    },
+                    {
+                        status: 422,
+                    }
+                );
+            }
+
+            console.log(
+                "[Shopify App] ✅ Linha adicionada:",
+                lineResult
+                    .data
+                    ?.subscriptionDraftLineAdd
+                    ?.lineAdded
+                    ?.id
+            );
+        }
+
+        // ============================================================
+        // RESULTADO
+        // ============================================================
+        //
+        // ATENÇÃO:
+        //
+        // subscriptionContractCreate cria um DRAFT.
+        //
+        // Não fazemos subscriptionDraftCommit aqui porque
+        // nossa cobrança recorrente é feita pelo Stripe.
+        //
+        // O draft fica disponível para o fluxo da assinatura.
+        //
+        // ============================================================
+
+        console.log(
+            "[Shopify App] ✅ Subscription draft preparado:",
+            draft.id
         );
 
         return Response.json({
             success: true,
-            contract,
+
+            contract: {
+                id: draft.id,
+            },
+
+            draft: {
+                id: draft.id,
+                status: draft.status,
+                nextBillingDate:
+                    draft.nextBillingDate,
+            },
         });
 
     } catch (error) {
