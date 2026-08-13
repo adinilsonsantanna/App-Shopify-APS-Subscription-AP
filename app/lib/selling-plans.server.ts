@@ -159,6 +159,17 @@ function mapGroup(group: RawGroup): SellingPlanGroup {
   };
 }
 
+function normalizeShopifyId(id: string | null | undefined) {
+  return id?.split("/").pop() ?? null;
+}
+
+function isOwnedApsGroup(group: RawGroup, currentAppId: string) {
+  return (
+    group.merchantCode === APS_MERCHANT_CODE &&
+    normalizeShopifyId(group.appId) === normalizeShopifyId(currentAppId)
+  );
+}
+
 export async function listSubscriptionProducts(admin: AdminGraphqlClient): Promise<SubscriptionProduct[]> {
   const data = await executeGraphql<ProductsQuery>(admin, "ListProducts", `#graphql
     ${PLAN_FIELDS}
@@ -184,7 +195,7 @@ export async function listSubscriptionProducts(admin: AdminGraphqlClient): Promi
   return data.products.nodes
     .map((product): SubscriptionProduct => {
       const groups = product.sellingPlanGroups.nodes
-        .filter((group) => group.merchantCode === APS_MERCHANT_CODE && group.appId === appId)
+        .filter((group) => isOwnedApsGroup(group, appId))
         .map(mapGroup);
       return {
         id: product.id,
@@ -219,7 +230,7 @@ export async function getSubscriptionProduct(admin: AdminGraphqlClient, productI
   if (!data.product) throw new Error("Produto não encontrado na Shopify.");
   const appId = data.currentAppInstallation.app.id;
   const groups = data.product.sellingPlanGroups.nodes
-    .filter((group) => group.merchantCode === APS_MERCHANT_CODE && group.appId === appId)
+    .filter((group) => isOwnedApsGroup(group, appId))
     .map(mapGroup);
   return {
     id: data.product.id,
