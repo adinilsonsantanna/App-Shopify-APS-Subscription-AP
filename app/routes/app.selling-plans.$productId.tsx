@@ -1,0 +1,126 @@
+import { useEffect, useState } from "react";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import { useAppBridge } from "@shopify/app-bridge-react";
+import { authenticate } from "../shopify.server";
+import {
+  createSellingPlan,
+  deleteSellingPlan,
+  getSubscriptionProduct,
+  updateSellingPlan,
+  type SellingPlan,
+} from "../lib/selling-plans.server";
+
+const intervals = ["DAY", "WEEK", "MONTH", "YEAR"] as const;
+const labels = { DAY: "Dia", WEEK: "Semana", MONTH: "Mês", YEAR: "Ano" };
+
+export const loader = async ({ request, params }: LoaderFunctionArgs) => {
+  const { admin } = await authenticate.admin(request);
+  const productId = params.productId;
+  if (!productId || !/^\d+$/.test(productId)) throw new Response("Produto inválido", { status: 400 });
+  return { product: await getSubscriptionProduct(admin, `gid://shopify/Product/${productId}`) };
+};
+
+export const action = async ({ request, params }: ActionFunctionArgs) => {
+  const { admin } = await authenticate.admin(request);
+  const productId = params.productId;
+  if (!productId || !/^\d+$/.test(productId)) return { ok: false, error: "Produto inválido." };
+  try {
+    const form = await request.formData();
+    const intent = String(form.get("intent") ?? "");
+    const product = await getSubscriptionProduct(admin, `gid://shopify/Product/${productId}`);
+    const groupId = String(form.get("groupId") ?? "");
+    const sellingPlanId = String(form.get("sellingPlanId") ?? "");
+
+    if (intent === "delete") {
+      const owned = product.groups.some((group) => group.id === groupId && group.sellingPlans.some((plan) => plan.id === sellingPlanId));
+      if (!owned) throw new Error("O plano não pertence ao grupo APS deste produto.");
+      await deleteSellingPlan(admin, groupId, sellingPlanId);
+      return { ok: true, message: "Selling Plan excluído." };
+    }
+
+    const name = String(form.get("name") ?? "").trim();
+    const interval = String(form.get("interval") ?? "");
+    const intervalCount = Number(form.get("intervalCount"));
+    const discountPercentage = Number(form.get("discountPercentage"));
+    if (!name || !intervals.includes(interval as typeof intervals[number])) throw new Error("Preencha um nome e uma frequência válidos.");
+    if (!Number.isInteger(intervalCount) || intervalCount < 1) throw new Error("O intervalo deve ser um número inteiro maior que zero.");
+    if (!Number.isFinite(discountPercentage) || discountPercentage < 0 || discountPercentage > 100) throw new Error("O desconto deve estar entre 0 e 100%.");
+    const input = { name, interval, intervalCount, discountPercentage };
+
+    if (intent === "create") await createSellingPlan(admin, product, input);
+    else if (intent === "update") {
+      const owned = product.groups.some((group) => group.id === groupId && group.sellingPlans.some((plan) => plan.id === sellingPlanId));
+      if (!owned) throw new Error("O plano não pertence ao grupo APS deste produto.");
+      await updateSellingPlan(admin, groupId, sellingPlanId, input);
+    } else throw new Error("Ação inválida.");
+    return { ok: true, message: intent === "create" ? "Selling Plan criado." : "Selling Plan atualizado." };
+  } catch (error) {
+    console.error("[Selling Plans] Falha na action:", error);
+    return { ok: false, error: error instanceof Error ? error.message : "Não foi possível salvar o Selling Plan." };
+  }
+};
+
+function PlanForm({ plan, groupId, onCancel }: { plan?: SellingPlan; groupId?: string; onCancel: () => void }) {
+  return (
+    <Form method="post">
+      <input type="hidden" name="intent" value={plan ? "update" : "create"} />
+      {plan && <><input type="hidden" name="groupId" value={groupId} /><input type="hidden" name="sellingPlanId" value={plan.id} /></>}
+      <s-stack direction="block" gap="base">
+        <s-text-field label="Nome do plano" name="name" value={plan?.name ?? ""} placeholder="Mensal" required />
+        <s-select label="Frequência" name="interval" value={plan?.interval ?? "MONTH"}>
+          {intervals.map((interval) => <s-option key={interval} value={interval}>{labels[interval]}</s-option>)}
+        </s-select>
+        <s-number-field label="Intervalo" name="intervalCount" value={String(plan?.intervalCount ?? 1)} min={1} step={1} required />
+        <s-number-field label="Desconto (%)" name="discountPercentage" value={String(plan?.discountPercentage ?? 20)} min={0} max={100} step={0.01} required />
+        <s-button-group><s-button type="submit" variant="primary">{plan ? "Salvar alterações" : "Criar Selling Plan"}</s-button><s-button type="button" onClick={onCancel}>Cancelar</s-button></s-button-group>
+      </s-stack>
+    </Form>
+  );
+}
+
+export default function ProductSellingPlans() {
+  const { product } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
+  const navigation = useNavigation();
+  const shopify = useAppBridge();
+  const [editing, setEditing] = useState<{ plan: SellingPlan; groupId: string } | null>(null);
+  const [creating, setCreating] = useState(false);
+  useEffect(() => {
+    if (actionData?.ok) { shopify.toast.show(actionData.message ?? "Operação concluída."); setEditing(null); setCreating(false); }
+  }, [actionData, shopify]);
+  const busy = navigation.state !== "idle";
+
+  return (
+    <s-page heading={product.title}>
+      <s-button slot="breadcrumb-actions" href="/app/selling-plans">Selling Plans</s-button>
+      <s-paragraph>Selling Plans gerenciados pelo APS Subscription.</s-paragraph>
+      {actionData && !actionData.ok && <s-banner heading="Não foi possível concluir" tone="critical">{actionData.error}</s-banner>}
+      {(creating || editing) && <s-section heading={editing ? `Editar ${editing.plan.name}` : "Criar Selling Plan"}><s-paragraph>Produto: {product.title}</s-paragraph><PlanForm plan={editing?.plan} groupId={editing?.groupId} onCancel={() => { setEditing(null); setCreating(false); }} /></s-section>}
+      <s-section heading="Selling Plans">
+        {product.groups.flatMap((group) => group.sellingPlans.map((plan) => ({ group, plan }))).length === 0 ? <s-paragraph>Nenhum Selling Plan APS associado a este produto.</s-paragraph> : (
+          <s-stack direction="block" gap="base">
+            {product.groups.flatMap((group) => group.sellingPlans.map((plan) => ({ group, plan }))).map(({ group, plan }) => (
+              <s-box key={plan.id} padding="base" border="base" borderRadius="base">
+                <s-stack direction="block" gap="small">
+                  <s-heading>{plan.name}</s-heading>
+                  <s-text>Cobrança: a cada {plan.intervalCount} {labels[plan.interval].toLowerCase()}(s)</s-text>
+                  <s-text>Entrega: a cada {plan.deliveryIntervalCount} {labels[plan.deliveryInterval].toLowerCase()}(s)</s-text>
+                  <s-text>Desconto: {plan.discountPercentage}%</s-text>
+                  <s-button-group>
+                    <s-button disabled={busy} onClick={() => { setCreating(false); setEditing({ groupId: group.id, plan }); }}>Editar</s-button>
+                    <Form method="post" onSubmit={(event) => { if (!confirm(`Excluir o plano “${plan.name}”?`)) event.preventDefault(); }}>
+                      <input type="hidden" name="intent" value="delete" /><input type="hidden" name="groupId" value={group.id} /><input type="hidden" name="sellingPlanId" value={plan.id} />
+                      <s-button type="submit" tone="critical" disabled={busy}>Excluir</s-button>
+                    </Form>
+                  </s-button-group>
+                </s-stack>
+              </s-box>
+            ))}
+          </s-stack>
+        )}
+        {!creating && !editing && <s-button variant="primary" onClick={() => setCreating(true)}>Criar Selling Plan</s-button>}
+      </s-section>
+    </s-page>
+  );
+}
