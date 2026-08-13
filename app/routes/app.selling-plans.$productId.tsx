@@ -33,9 +33,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const sellingPlanId = String(form.get("sellingPlanId") ?? "");
 
     if (intent === "delete") {
-      const owned = product.groups.some((group) => group.id === groupId && group.sellingPlans.some((plan) => plan.id === sellingPlanId));
-      if (!owned) throw new Error("O plano não pertence ao grupo APS deste produto.");
-      await deleteSellingPlan(admin, groupId, sellingPlanId);
+      const group = product.groups.find((candidate) => candidate.id === groupId);
+      const owned = group?.sellingPlans.some((plan) => plan.id === sellingPlanId);
+      if (!group || !owned) throw new Error("O plano não pertence ao grupo APS deste produto.");
+      await deleteSellingPlan(admin, group, sellingPlanId);
       return { ok: true, message: "Selling Plan excluído." };
     }
 

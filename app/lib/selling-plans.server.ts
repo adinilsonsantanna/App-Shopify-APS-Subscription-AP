@@ -53,6 +53,13 @@ type MutationResult = {
   sellingPlanGroupUpdate: { userErrors: UserError[] };
 };
 
+type DeleteGroupResult = {
+  sellingPlanGroupDelete: {
+    deletedSellingPlanGroupId: string | null;
+    userErrors: UserError[];
+  };
+};
+
 export type SellingPlan = {
   id: string;
   name: string;
@@ -313,7 +320,24 @@ export async function updateSellingPlan(
   assertNoUserErrors("SellingPlanGroupUpdatePlan", data.sellingPlanGroupUpdate.userErrors);
 }
 
-export async function deleteSellingPlan(admin: AdminGraphqlClient, groupId: string, sellingPlanId: string) {
+export async function deleteSellingPlan(
+  admin: AdminGraphqlClient,
+  group: SellingPlanGroup,
+  sellingPlanId: string,
+) {
+  if (group.sellingPlans.length === 1) {
+    const data = await executeGraphql<DeleteGroupResult>(admin, "SellingPlanGroupDelete", `#graphql
+      mutation ApsSellingPlanGroupDelete($id: ID!) {
+        sellingPlanGroupDelete(id: $id) {
+          deletedSellingPlanGroupId
+          userErrors { field message }
+        }
+      }
+    `, { id: group.id });
+    assertNoUserErrors("SellingPlanGroupDelete", data.sellingPlanGroupDelete.userErrors);
+    return;
+  }
+
   const data = await executeGraphql<MutationResult>(admin, "SellingPlanGroupDeletePlan", `#graphql
     mutation ApsSellingPlanGroupDeletePlan($id: ID!, $input: SellingPlanGroupInput!) {
       sellingPlanGroupUpdate(id: $id, input: $input) {
@@ -321,6 +345,6 @@ export async function deleteSellingPlan(admin: AdminGraphqlClient, groupId: stri
         userErrors { field message }
       }
     }
-  `, { id: groupId, input: { sellingPlansToDelete: [sellingPlanId] } });
+  `, { id: group.id, input: { sellingPlansToDelete: [sellingPlanId] } });
   assertNoUserErrors("SellingPlanGroupDeletePlan", data.sellingPlanGroupUpdate.userErrors);
 }
