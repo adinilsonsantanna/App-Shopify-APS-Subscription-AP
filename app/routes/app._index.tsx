@@ -1,117 +1,110 @@
-// app/routes/app._index.tsx
 import { useEffect, useState } from "react";
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { useFetcher } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import type { LoaderFunctionArgs } from "react-router";
+import { useFetcher, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
+import { getDashboardMetrics } from "../lib/dashboard.server";
+
+const ranges = [7, 30, 60, 90] as const;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  return null;
-};
-
-export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
-  const color = ["Red", "Orange", "Yellow", "Green"][Math.floor(Math.random() * 4)];
-  const response = await admin.graphql(
-    `#graphql
-      mutation populateProduct($product: ProductCreateInput!) {
-        productCreate(product: $product) {
-          product {
-            id
-            title
-            handle
-            status
-            variants(first: 10) {
-              edges {
-                node {
-                  id
-                  price
-                  barcode
-                  createdAt
-                }
-              }
-            }
-          }
-        }
-      }`,
-    {
-      variables: {
-        product: {
-          title: `${color} Snowboard`,
-          variants: [{ price: "100.00" }],
-        },
+  const requestedDays = Number(new URL(request.url).searchParams.get("days"));
+  const days = ranges.includes(requestedDays as typeof ranges[number]) ? requestedDays : 7;
+
+  try {
+    return { metrics: await getDashboardMetrics(admin, days), error: null };
+  } catch (error) {
+    console.error("[Dashboard] Falha ao carregar métricas:", error);
+    return {
+      metrics: {
+        days,
+        from: new Date(Date.now() - days * 86400000).toISOString(),
+        to: new Date().toISOString(),
+        currencyCode: "BRL",
+        revenue: 0,
+        activeSubscriptions: 0,
+        newSubscriptions: 0,
+        cancelledSubscriptions: 0,
       },
-    }
-  );
-  const responseJson = await response.json();
-  return { product: responseJson.data!.productCreate!.product };
+      error: error instanceof Error ? error.message : "Não foi possível carregar os indicadores.",
+    };
+  }
 };
 
-export default function Index() {
-  const fetcher = useFetcher<typeof action>();
-  const installFetcher = useFetcher();
-  const shopify = useAppBridge();
-  const [syncStatus, setSyncStatus] = useState<"loading" | "success" | "error" | null>(null);
-  const [syncMessage, setSyncMessage] = useState("");
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value));
+}
 
-  const isLoading =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
-  const productId = fetcher.data?.product?.id;
+function MetricCard({ label, value, detail }: { label: string; value: string | number; detail: string }) {
+  return (
+    <s-box padding="base" border="base" borderRadius="base" background="base">
+      <s-stack direction="block" gap="small">
+        <s-text>{label}</s-text>
+        <s-heading>{value}</s-heading>
+        <s-text color="subdued">{detail}</s-text>
+      </s-stack>
+    </s-box>
+  );
+}
+
+export default function Dashboard() {
+  const { metrics, error } = useLoaderData<typeof loader>();
+  const installFetcher = useFetcher<{ success?: boolean; error?: string }>();
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   useEffect(() => {
     if (installFetcher.state === "idle" && !installFetcher.data) {
       installFetcher.submit(null, { method: "POST", action: "/api/install" });
-      setSyncStatus("loading");
     }
   }, [installFetcher]);
 
   useEffect(() => {
-    if (installFetcher.data) {
-      if (installFetcher.data.success) {
-        setSyncStatus("success");
-        setSyncMessage("Loja sincronizada com a API Central de Assinaturas");
-      } else {
-        setSyncStatus("error");
-        setSyncMessage(`Erro na sincronização: ${installFetcher.data.error}`);
-      }
+    if (installFetcher.data && !installFetcher.data.success) {
+      setSyncError(installFetcher.data.error ?? "Falha ao sincronizar a loja com a API central.");
     }
   }, [installFetcher.data]);
 
-  useEffect(() => {
-    if (productId) {
-      shopify.toast.show("Product created");
-    }
-  }, [productId, shopify]);
-
-  const generateProduct = () => fetcher.submit({}, { method: "POST" });
+  const revenue = new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: metrics.currencyCode,
+  }).format(metrics.revenue);
 
   return (
-    <div style={{ padding: "20px" }}>
-      <h1>APS Subscription App</h1>
+    <s-page heading="Visão geral">
+      <s-stack direction="block" gap="base">
+        <s-paragraph>Acompanhe o desempenho das assinaturas gerenciadas pelo APS Subscription.</s-paragraph>
 
-      {syncStatus === "loading" && (
-        <div style={{ padding: "12px", marginBottom: "20px", background: "#fff3cd", borderRadius: "6px" }}>
-          ⏳ Sincronizando loja com a API Central...
-        </div>
-      )}
+        {error && <s-banner heading="Indicadores temporariamente indisponíveis" tone="warning">{error}</s-banner>}
+        {syncError && <s-banner heading="Falha na sincronização com a API central" tone="warning">{syncError}</s-banner>}
 
-      {syncStatus === "success" && (
-        <div style={{ padding: "12px", marginBottom: "20px", background: "#d4edda", borderRadius: "6px" }}>
-          ✅ {syncMessage}
-        </div>
-      )}
+        <s-section heading="Desempenho">
+          <s-stack direction="block" gap="base">
+            <s-stack direction="inline" gap="small" alignItems="center">
+              {ranges.map((days) => (
+                <s-button key={days} href={`/app?days=${days}`} variant={metrics.days === days ? "primary" : "secondary"}>
+                  {days} dias
+                </s-button>
+              ))}
+            </s-stack>
 
-      {syncStatus === "error" && (
-        <div style={{ padding: "12px", marginBottom: "20px", background: "#f8d7da", borderRadius: "6px" }}>
-          ❌ {syncMessage}
-        </div>
-      )}
+            <s-text color="subdued">{formatDate(metrics.from)} – {formatDate(metrics.to)}</s-text>
 
-      <button onClick={generateProduct} disabled={isLoading}>
-        {isLoading ? "Creating..." : "Generate a product"}
-      </button>
-    </div>
+            <s-grid gridTemplateColumns="repeat(auto-fit, minmax(210px, 1fr))" gap="base">
+              <MetricCard label="Receita de assinaturas" value={revenue} detail={`Pedidos nos últimos ${metrics.days} dias`} />
+              <MetricCard label="Assinaturas ativas" value={metrics.activeSubscriptions} detail="Contratos ativos atualmente" />
+              <MetricCard label="Novas assinaturas" value={metrics.newSubscriptions} detail={`Criadas nos últimos ${metrics.days} dias`} />
+              <MetricCard label="Assinaturas canceladas" value={metrics.cancelledSubscriptions} detail={`Atualizadas como canceladas nos últimos ${metrics.days} dias`} />
+            </s-grid>
+          </s-stack>
+        </s-section>
+
+        <s-section heading="Gerenciamento rápido">
+          <s-stack direction="inline" gap="base">
+            <s-button href="/app/selling-plans" variant="primary">Gerenciar Selling Plans</s-button>
+            <s-button href="/app/settings" variant="secondary">Configurações</s-button>
+          </s-stack>
+        </s-section>
+      </s-stack>
+    </s-page>
   );
 }
