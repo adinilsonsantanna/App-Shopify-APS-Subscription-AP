@@ -164,15 +164,15 @@ export async function listSubscriptionProducts(admin: AdminGraphqlClient): Promi
     ${PLAN_FIELDS}
     query ApsSubscriptionProducts {
       currentAppInstallation { app { id } }
-      products(first: 100, sortKey: TITLE) {
+      products(first: 25, sortKey: TITLE) {
         nodes {
           id
           title
           featuredMedia { preview { image { url altText } } }
-          sellingPlanGroups(first: 20) {
+          sellingPlanGroups(first: 2) {
             nodes {
               id name merchantCode appId
-              sellingPlans(first: 50) { nodes { ...ApsSellingPlanFields } }
+              sellingPlans(first: 10) { nodes { ...ApsSellingPlanFields } }
             }
           }
         }
@@ -207,7 +207,7 @@ export async function getSubscriptionProduct(admin: AdminGraphqlClient, productI
       product(id: $id) {
         id title
         featuredMedia { preview { image { url altText } } }
-        sellingPlanGroups(first: 20) {
+        sellingPlanGroups(first: 10) {
           nodes {
             id name merchantCode appId
             sellingPlans(first: 50) { nodes { ...ApsSellingPlanFields } }
