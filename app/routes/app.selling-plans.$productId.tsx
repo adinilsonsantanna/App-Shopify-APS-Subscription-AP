@@ -103,7 +103,7 @@ export default function ProductSellingPlans() {
       <s-button slot="breadcrumb-actions" href="/app/selling-plans">Selling Plans</s-button>
       <s-paragraph>Selling Plans gerenciados pelo APS Subscription.</s-paragraph>
       {actionData && !actionData.ok && <s-banner heading="Não foi possível concluir" tone="critical">{actionData.error}</s-banner>}
-      {(creating || editing) && <s-section heading={editing ? `Editar ${editing.plan.name}` : "Criar Selling Plan"}><s-paragraph>Produto: {product.title}</s-paragraph><PlanForm plan={editing?.plan} groupId={editing?.groupId} onCancel={() => { setEditing(null); setCreating(false); }} /></s-section>}
+      {creating && <s-section heading="Criar Selling Plan"><s-paragraph>Produto: {product.title}</s-paragraph><PlanForm onCancel={() => setCreating(false)} /></s-section>}
       <s-section heading="Selling Plans">
         {plans.length === 0 ? <s-paragraph>Nenhum Selling Plan APS associado a este produto.</s-paragraph> : (
           <s-stack direction="block" gap="base">
@@ -122,6 +122,17 @@ export default function ProductSellingPlans() {
                       <s-button type="submit" tone="critical" disabled={busy}>Excluir</s-button>
                     </Form>
                   </s-stack>
+                  {editing?.plan.id === plan.id && (
+                    <s-stack direction="block" gap="base">
+                      <s-divider />
+                      <s-heading>Editar {plan.name}</s-heading>
+                      <PlanForm
+                        plan={plan}
+                        groupId={group.id}
+                        onCancel={() => setEditing(null)}
+                      />
+                    </s-stack>
+                  )}
                 </s-stack>
               </s-box>
             ))}
