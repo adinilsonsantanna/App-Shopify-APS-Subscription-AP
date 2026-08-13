@@ -557,37 +557,154 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
 
         // ============================================================
-        // RESULTADO
+        // COMMIT DO SUBSCRIPTION DRAFT
         // ============================================================
         //
-        // ATENÇÃO:
-        //
-        // subscriptionContractCreate cria um DRAFT.
-        //
-        // Não fazemos subscriptionDraftCommit aqui porque
-        // nossa cobrança recorrente é feita pelo Stripe.
-        //
-        // O draft fica disponível para o fluxo da assinatura.
+        // O checkout inicial já foi realizado pela Shopify.
+        // A partir daqui finalizamos o Subscription Contract nativo
+        // da Shopify. Não usamos Stripe neste fluxo.
         //
         // ============================================================
 
         console.log(
-            "[Shopify App] ✅ Subscription draft preparado:",
+            "[Shopify App] Finalizando subscription draft:",
             draft.id
+        );
+
+        const commitResponse =
+            await admin.graphql(
+                `#graphql
+                mutation subscriptionDraftCommit(
+                    $draftId: ID!
+                ) {
+                    subscriptionDraftCommit(
+                        draftId: $draftId
+                    ) {
+                        contract {
+                            id
+                            status
+                            nextBillingDate
+                            customer {
+                                id
+                            }
+                        }
+
+                        userErrors {
+                            field
+                            message
+                        }
+                    }
+                }
+                `,
+                {
+                    variables: {
+                        draftId: draft.id,
+                    },
+                }
+            );
+
+        const commitResult =
+            await commitResponse.json();
+
+        if (
+            !commitResponse.ok ||
+            commitResult.errors?.length
+        ) {
+            console.error(
+                "[Shopify App] Erro GraphQL ao finalizar subscription draft:",
+                commitResult
+            );
+
+            return Response.json(
+                {
+                    error:
+                        "Erro Shopify ao finalizar assinatura",
+                    details:
+                        commitResult,
+                    draftId:
+                        draft.id,
+                },
+                {
+                    status: 502,
+                }
+            );
+        }
+
+        const commitUserErrors =
+            commitResult
+                .data
+                ?.subscriptionDraftCommit
+                ?.userErrors || [];
+
+        if (
+            commitUserErrors.length > 0
+        ) {
+            console.error(
+                "[Shopify App] subscriptionDraftCommit userErrors:",
+                commitUserErrors
+            );
+
+            return Response.json(
+                {
+                    error:
+                        "Erro ao finalizar assinatura Shopify",
+                    details:
+                        commitUserErrors,
+                    draftId:
+                        draft.id,
+                },
+                {
+                    status: 422,
+                }
+            );
+        }
+
+        const committedContract =
+            commitResult
+                .data
+                ?.subscriptionDraftCommit
+                ?.contract;
+
+        if (!committedContract?.id) {
+            console.error(
+                "[Shopify App] Shopify não retornou o Subscription Contract:",
+                commitResult
+            );
+
+            return Response.json(
+                {
+                    error:
+                        "Shopify não retornou o Subscription Contract",
+                    details:
+                        commitResult,
+                    draftId:
+                        draft.id,
+                },
+                {
+                    status: 502,
+                }
+            );
+        }
+
+        console.log(
+            "[Shopify App] ✅ Subscription Contract criado:",
+            committedContract.id
         );
 
         return Response.json({
             success: true,
 
             contract: {
-                id: draft.id,
+                id:
+                    committedContract.id,
+                status:
+                    committedContract.status,
+                nextBillingDate:
+                    committedContract.nextBillingDate,
             },
 
             draft: {
                 id: draft.id,
-                status: draft.status,
-                nextBillingDate:
-                    draft.nextBillingDate,
             },
         });
 
