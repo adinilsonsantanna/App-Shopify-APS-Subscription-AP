@@ -101,6 +101,7 @@ export default function Dashboard() {
         <s-section heading="Gerenciamento rápido">
           <s-stack direction="inline" gap="base">
             <s-button href="/app/selling-plans" variant="primary">Gerenciar Selling Plans</s-button>
+            <s-button href="/app/contracts" variant="secondary">Gerenciar contratos</s-button>
             <s-button href="/app/settings" variant="secondary">Configurações</s-button>
           </s-stack>
         </s-section>
