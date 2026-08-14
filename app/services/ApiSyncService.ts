@@ -7,13 +7,15 @@ export interface SyncShopPayload {
 }
 
 export class ApiSyncService {
-  private apiUrl = process.env.APS_API_URL!;
+  private apiUrl = process.env.API_SUBSCRIPTION_URL!;
+  private apiKey = process.env.API_KEY!;
 
   async syncShop(data: SyncShopPayload) {
     const response = await fetch(`${this.apiUrl}/api/shop/install`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "X-API-Key": this.apiKey,
       },
       body: JSON.stringify(data),
     });

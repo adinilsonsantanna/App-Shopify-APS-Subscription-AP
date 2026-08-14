@@ -2,12 +2,18 @@
 
 import type { ActionFunctionArgs } from "react-router";
 import { unauthenticated } from "../shopify.server";
+import { getShopifyGraphqlErrors } from "../lib/graphql-response.server";
 
 const INTERNAL_API_KEY = process.env.API_KEY || "";
 
 export const action = async ({
   request,
 }: ActionFunctionArgs) => {
+  // Deprecated: recurring orders are created by Shopify billing attempts.
+  if (process.env.ENABLE_LEGACY_SUBSCRIPTION_FLOW !== "true") {
+    return Response.json({ error: "Legacy subscription flow is disabled" }, { status: 410 });
+  }
+
   try {
     // ============================================================
     // MÉTODO
@@ -176,6 +182,7 @@ export const action = async ({
 
     const result =
       await response.json();
+    const graphqlErrors = getShopifyGraphqlErrors(result);
 
     // ============================================================
     // ERRO HTTP
@@ -206,19 +213,18 @@ export const action = async ({
     // ============================================================
 
     if (
-      result.errors &&
-      result.errors.length > 0
+      graphqlErrors.length > 0
     ) {
       console.error(
         "[Shopify App] GraphQL errors:",
-        result.errors
+        graphqlErrors
       );
 
       return Response.json(
         {
           error:
             "Shopify GraphQL error",
-          details: result.errors,
+          details: graphqlErrors,
         },
         {
           status: 502,
