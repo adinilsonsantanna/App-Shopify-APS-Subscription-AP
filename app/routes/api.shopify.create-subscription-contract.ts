@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs } from "react-router";
 import { unauthenticated } from "../shopify.server";
+import { getShopifyGraphqlErrors } from "../lib/graphql-response.server";
 
 const INTERNAL_API_KEY = process.env.API_KEY || "";
 
@@ -272,6 +273,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         const createResult =
             await createResponse.json();
+        const createGraphqlErrors = getShopifyGraphqlErrors(createResult);
 
         // ============================================================
         // ERRO HTTP
@@ -304,12 +306,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         // ============================================================
 
         if (
-            createResult.errors &&
-            createResult.errors.length > 0
+            createGraphqlErrors.length > 0
         ) {
             console.error(
                 "[Shopify App] GraphQL errors:",
-                createResult.errors
+                createGraphqlErrors
             );
 
             return Response.json(
@@ -317,7 +318,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                     error:
                         "Shopify GraphQL error",
                     details:
-                        createResult.errors,
+                        createGraphqlErrors,
                 },
                 {
                     status: 502,
@@ -489,6 +490,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
             const lineResult =
                 await lineResponse.json();
+            const lineGraphqlErrors = getShopifyGraphqlErrors(lineResult);
 
             // ========================================================
             // GRAPHQL ERROR
@@ -496,7 +498,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
             if (
                 !lineResponse.ok ||
-                lineResult.errors?.length
+                lineGraphqlErrors.length > 0
             ) {
                 console.error(
                     "[Shopify App] Erro GraphQL ao adicionar linha:",
@@ -610,10 +612,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         const commitResult =
             await commitResponse.json();
+        const commitGraphqlErrors = getShopifyGraphqlErrors(commitResult);
 
         if (
             !commitResponse.ok ||
-            commitResult.errors?.length
+            commitGraphqlErrors.length > 0
         ) {
             console.error(
                 "[Shopify App] Erro GraphQL ao finalizar subscription draft:",
