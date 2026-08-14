@@ -11,8 +11,8 @@ interface CapturedLog {
   metadata: Record<string, unknown>;
 }
 
-function request(method = "POST", webhookId = "webhook-1") {
-  const headers = webhookId ? { "x-shopify-webhook-id": webhookId } : undefined;
+function request(method = "POST", webhookId = "webhook-1", eventId?: string) {
+  const headers = webhookId ? { "x-shopify-webhook-id": webhookId, ...(eventId ? { "x-shopify-event-id": eventId } : {}) } : undefined;
   return new Request("https://app.example.test/webhooks/subscription_contracts/create", {
     method,
     headers,
@@ -26,7 +26,7 @@ function dependencies(overrides: Partial<WebhookForwarderDependencies> = {}) {
     authenticateWebhook: async () => ({
       shop: "known.myshopify.com",
       topic: "SUBSCRIPTION_CONTRACTS_CREATE",
-      payload: { admin_graphql_api_id: "gid://shopify/SubscriptionContract/1", status: "active" },
+      payload: { admin_graphql_api_id: "gid://shopify/SubscriptionContract/1", revision_id: "revision-7", status: "active" },
       admin: { graphql: async () => new Response() },
     }),
     fetchFn: (async (input, init) => {
@@ -38,7 +38,7 @@ function dependencies(overrides: Partial<WebhookForwarderDependencies> = {}) {
       API_KEY: "super-secret-api-key",
     },
     now: () => new Date("2026-08-14T12:00:00.000Z"),
-    loadContract: async () => ({
+    loadContract: async () => ({ shopifyShopId: "gid://shopify/Shop/123", contract: {
       id: "gid://shopify/SubscriptionContract/1",
       status: "ACTIVE",
       nextBillingAt: "2026-09-14T12:00:00.000Z",
@@ -48,7 +48,7 @@ function dependencies(overrides: Partial<WebhookForwarderDependencies> = {}) {
       billingPolicy: { interval: "MONTH", intervalCount: 1 },
       deliveryPolicy: { interval: "MONTH", intervalCount: 1 },
       lines: [{ id: "gid://shopify/SubscriptionLine/1", productId: "gid://shopify/Product/1", variantId: "gid://shopify/ProductVariant/1", quantity: 1, currentPrice: { amount: "99.90", currencyCode: "BRL" }, sellingPlanId: "gid://shopify/SellingPlan/1" }],
-    }),
+    } }),
     logger: {
       error: (message, metadata) => logs.push({ message, metadata }),
       info: (message, metadata) => logs.push({ message, metadata }),
@@ -132,9 +132,11 @@ test("forwards a successful webhook exactly once", async () => {
     shop: "known.myshopify.com",
     topic: "subscription_contracts/create",
     webhookId: "webhook-1",
-    payload: { admin_graphql_api_id: "gid://shopify/SubscriptionContract/1", status: "active" },
+    shopifyShopId: "gid://shopify/Shop/123",
+    payload: { admin_graphql_api_id: "gid://shopify/SubscriptionContract/1", revision_id: "revision-7", status: "active" },
     contract: {
       id: "gid://shopify/SubscriptionContract/1",
+      revisionId: "revision-7",
       status: "ACTIVE",
       nextBillingAt: "2026-09-14T12:00:00.000Z",
       currencyCode: "BRL",
@@ -161,6 +163,34 @@ test("enriches subscription_contracts/update", async () => {
   const setup = dependencies({ authenticateWebhook: async () => ({ shop: "known.myshopify.com", topic: "SUBSCRIPTION_CONTRACTS_UPDATE", payload: { id: 1 }, admin: { graphql: async () => new Response() } }) });
   await createShopifyWebhookForwarder(setup.value)(request(), "subscription_contracts/update");
   assert.equal(JSON.parse(String(setup.calls[0]?.init?.body)).contract.id, "gid://shopify/SubscriptionContract/1");
+});
+
+test("forwards webhook delivery and Shopify event identifiers separately", async () => {
+  const setup = dependencies();
+  await createShopifyWebhookForwarder(setup.value)(request("POST", "delivery-1", "event-1"), "subscription_contracts/create");
+  const body = JSON.parse(String(setup.calls[0]?.init?.body));
+  assert.equal(body.webhookId, "delivery-1");
+  assert.equal(body.shopifyEventId, "event-1");
+  assert.equal(body.shopifyShopId, "gid://shopify/Shop/123");
+  assert.equal(body.contract.revisionId, "revision-7");
+});
+
+test("forwards multiple contract lines and each selling plan", async () => {
+  const setup = dependencies({ loadContract: async () => ({ shopifyShopId: "gid://shopify/Shop/123", contract: {
+    id: "gid://shopify/SubscriptionContract/1", status: "ACTIVE", currencyCode: "BRL",
+    billingPolicy: { interval: "MONTH", intervalCount: 1 }, deliveryPolicy: { interval: "MONTH", intervalCount: 1 },
+    lines: [1, 2].map((number) => ({ id: `gid://shopify/SubscriptionLine/${number}`, productId: `gid://shopify/Product/${number}`, variantId: `gid://shopify/ProductVariant/${number}`, sellingPlanId: `gid://shopify/SellingPlan/${number}`, quantity: number, currentPrice: { amount: `${number}.00`, currencyCode: "BRL" } })),
+  } }) });
+  await createShopifyWebhookForwarder(setup.value)(request(), "subscription_contracts/create");
+  const lines = JSON.parse(String(setup.calls[0]?.init?.body)).contract.lines;
+  assert.equal(lines.length, 2);
+  assert.equal(lines[1].sellingPlanId, "gid://shopify/SellingPlan/2");
+});
+
+test("accepts a missing Shopify event header", async () => {
+  const setup = dependencies();
+  await createShopifyWebhookForwarder(setup.value)(request(), "subscription_contracts/create");
+  assert.equal("shopifyEventId" in JSON.parse(String(setup.calls[0]?.init?.body)), false);
 });
 
 test("returns retryable error and does not forward when GraphQL enrichment fails", async () => {
