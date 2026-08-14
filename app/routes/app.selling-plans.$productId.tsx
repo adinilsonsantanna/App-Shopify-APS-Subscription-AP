@@ -4,9 +4,11 @@ import { Form, useActionData, useLoaderData, useNavigation } from "react-router"
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import {
+  clearBadgeSellingPlanIfSelected,
   createSellingPlan,
   deleteSellingPlan,
   getSubscriptionProduct,
+  setBadgeSellingPlanId,
   updateSellingPlan,
   type SellingPlan,
 } from "../lib/selling-plans.server";
@@ -32,10 +34,24 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const groupId = String(form.get("groupId") ?? "");
     const sellingPlanId = String(form.get("sellingPlanId") ?? "");
 
+    if (intent === "badge") {
+      const badgeSellingPlanId = String(form.get("badgeSellingPlanId") ?? "");
+      if (badgeSellingPlanId !== "none" && !/^gid:\/\/shopify\/SellingPlan\/\d+$/.test(badgeSellingPlanId)) {
+        throw new Error("Selecione um Selling Plan válido.");
+      }
+      await setBadgeSellingPlanId(
+        admin,
+        product.id,
+        badgeSellingPlanId === "none" ? null : badgeSellingPlanId,
+      );
+      return { ok: true, message: "Configuração do badge salva." };
+    }
+
     if (intent === "delete") {
       const group = product.groups.find((candidate) => candidate.id === groupId);
       const owned = group?.sellingPlans.some((plan) => plan.id === sellingPlanId);
       if (!group || !owned) throw new Error("O plano não pertence ao grupo APS deste produto.");
+      await clearBadgeSellingPlanIfSelected(admin, product, sellingPlanId);
       await deleteSellingPlan(admin, group, sellingPlanId);
       return { ok: true, message: "Selling Plan excluído." };
     }
@@ -139,6 +155,25 @@ export default function ProductSellingPlans() {
           </s-stack>
         )}
         {!creating && !editing && <s-button variant="primary" onClick={() => setCreating(true)}>Criar Selling Plan</s-button>}
+      </s-section>
+      <s-section heading="Badge na loja">
+        <s-paragraph>Escolha qual Selling Plan receberá o badge configurado no editor do tema da Shopify.</s-paragraph>
+        <Form method="post">
+          <input type="hidden" name="intent" value="badge" />
+          <s-stack direction="block" gap="base">
+            <s-select
+              label="Exibir badge no plano"
+              name="badgeSellingPlanId"
+              value={plans.find(({ plan }) => plan.id.split("/").pop() === product.badgeSellingPlanId)?.plan.id ?? "none"}
+            >
+              <s-option value="none">Não exibir badge</s-option>
+              {plans.map(({ plan }) => (
+                <s-option key={plan.id} value={plan.id}>{plan.name}</s-option>
+              ))}
+            </s-select>
+            <s-button type="submit" variant="primary" disabled={busy}>Salvar configuração</s-button>
+          </s-stack>
+        </Form>
       </s-section>
     </s-page>
   );

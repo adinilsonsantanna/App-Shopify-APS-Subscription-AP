@@ -1,4 +1,6 @@
 const APS_MERCHANT_CODE = "aps-subscription";
+const BADGE_METAFIELD_NAMESPACE = "aps_subscription";
+const BADGE_METAFIELD_KEY = "badge_selling_plan_id";
 
 type AdminGraphqlClient = {
   graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
@@ -36,6 +38,7 @@ type RawProduct = {
   title: string;
   featuredMedia?: { preview?: { image?: { url: string; altText: string | null } | null } | null } | null;
   sellingPlanGroups: { nodes: RawGroup[] };
+  badgeSellingPlan?: { value: string } | null;
 };
 
 type ProductsQuery = {
@@ -58,6 +61,14 @@ type DeleteGroupResult = {
     deletedSellingPlanGroupId: string | null;
     userErrors: UserError[];
   };
+};
+
+type MetafieldsSetResult = {
+  metafieldsSet: { userErrors: UserError[] };
+};
+
+type MetafieldsDeleteResult = {
+  metafieldsDelete: { userErrors: UserError[] };
 };
 
 export type SellingPlan = {
@@ -85,6 +96,7 @@ export type SubscriptionProduct = {
   title: string;
   image: { url: string; altText: string | null } | null;
   groups: SellingPlanGroup[];
+  badgeSellingPlanId: string | null;
 };
 
 const PLAN_FIELDS = `#graphql
@@ -214,6 +226,7 @@ export async function listSubscriptionProducts(
         title: product.title,
         image: product.featuredMedia?.preview?.image ?? null,
         groups,
+        badgeSellingPlanId: null,
       };
     })
     .filter((product: SubscriptionProduct) => search.length > 0 ||
@@ -228,6 +241,10 @@ export async function getSubscriptionProduct(admin: AdminGraphqlClient, productI
       currentAppInstallation { app { id } }
       product(id: $id) {
         id title
+        badgeSellingPlan: metafield(
+          namespace: "aps_subscription"
+          key: "badge_selling_plan_id"
+        ) { value }
         featuredMedia { preview { image { url altText } } }
         sellingPlanGroups(first: 10) {
           nodes {
@@ -249,7 +266,77 @@ export async function getSubscriptionProduct(admin: AdminGraphqlClient, productI
     title: data.product.title,
     image: data.product.featuredMedia?.preview?.image ?? null,
     groups,
+    badgeSellingPlanId: data.product.badgeSellingPlan?.value ?? null,
   } as SubscriptionProduct;
+}
+
+async function deleteBadgeSellingPlanMetafield(
+  admin: AdminGraphqlClient,
+  productId: string,
+) {
+  const data = await executeGraphql<MetafieldsDeleteResult>(admin, "DeleteBadgeSellingPlanMetafield", `#graphql
+    mutation DeleteBadgeSellingPlanMetafield($metafields: [MetafieldIdentifierInput!]!) {
+      metafieldsDelete(metafields: $metafields) {
+        deletedMetafields { key namespace ownerId }
+        userErrors { field message }
+      }
+    }
+  `, {
+    metafields: [{
+      ownerId: productId,
+      namespace: BADGE_METAFIELD_NAMESPACE,
+      key: BADGE_METAFIELD_KEY,
+    }],
+  });
+  assertNoUserErrors("DeleteBadgeSellingPlanMetafield", data.metafieldsDelete.userErrors);
+}
+
+export async function setBadgeSellingPlanId(
+  admin: AdminGraphqlClient,
+  productId: string,
+  sellingPlanId: string | null,
+) {
+  if (!sellingPlanId) {
+    await deleteBadgeSellingPlanMetafield(admin, productId);
+    return;
+  }
+
+  const product = await getSubscriptionProduct(admin, productId);
+  const numericSellingPlanId = normalizeShopifyId(sellingPlanId);
+  const belongsToProduct = product.groups.some((group) =>
+    group.sellingPlans.some((plan) => plan.id === sellingPlanId),
+  );
+  if (!numericSellingPlanId || !/^\d+$/.test(numericSellingPlanId) || !belongsToProduct) {
+    throw new Error("O plano não pertence a um grupo APS deste produto.");
+  }
+
+  const data = await executeGraphql<MetafieldsSetResult>(admin, "SetBadgeSellingPlanMetafield", `#graphql
+    mutation SetBadgeSellingPlanMetafield($metafields: [MetafieldsSetInput!]!) {
+      metafieldsSet(metafields: $metafields) {
+        metafields { key namespace value }
+        userErrors { field message }
+      }
+    }
+  `, {
+    metafields: [{
+      ownerId: productId,
+      namespace: BADGE_METAFIELD_NAMESPACE,
+      key: BADGE_METAFIELD_KEY,
+      type: "single_line_text_field",
+      value: numericSellingPlanId,
+    }],
+  });
+  assertNoUserErrors("SetBadgeSellingPlanMetafield", data.metafieldsSet.userErrors);
+}
+
+export async function clearBadgeSellingPlanIfSelected(
+  admin: AdminGraphqlClient,
+  product: SubscriptionProduct,
+  sellingPlanId: string,
+) {
+  if (product.badgeSellingPlanId === normalizeShopifyId(sellingPlanId)) {
+    await deleteBadgeSellingPlanMetafield(admin, product.id);
+  }
 }
 
 function planInput(input: { name: string; interval: string; intervalCount: number; discountPercentage: number }) {
