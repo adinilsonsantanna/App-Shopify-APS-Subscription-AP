@@ -8,6 +8,11 @@ const INTERNAL_API_KEY = process.env.API_KEY || "";
 export const action = async ({
   request,
 }: ActionFunctionArgs) => {
+  // Deprecated: recurring orders are created by Shopify billing attempts.
+  if (process.env.ENABLE_LEGACY_SUBSCRIPTION_FLOW !== "true") {
+    return Response.json({ error: "Legacy subscription flow is disabled" }, { status: 410 });
+  }
+
   try {
     // ============================================================
     // MÉTODO
