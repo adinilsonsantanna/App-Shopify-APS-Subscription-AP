@@ -93,7 +93,7 @@ export default function SettingsPage() {
                 <s-option value="CANCEL_AND_NOTIFY">Cancelar assinatura e enviar notificação</s-option>
                 <s-option value="SKIP_AND_NOTIFY">Pular pedido e enviar notificação</s-option>
               </s-select>
-              <s-link href={notificationsUrl}>Editar notificações</s-link>
+              <s-link href={notificationsUrl} target="_top">Editar notificações</s-link>
               <s-divider />
               <s-heading>Estoque insuficiente</s-heading>
               <s-grid gridTemplateColumns="1fr 1fr" gap="base">
@@ -117,7 +117,7 @@ export default function SettingsPage() {
                 <s-option value="WEEKLY_SUMMARY">Resumo semanal de falhas de faturamento</s-option>
                 <s-option value="NEVER">Não enviar notificações</s-option>
               </s-select>
-              <s-link href={notificationsUrl}>Editar notificações</s-link>
+              <s-link href={notificationsUrl} target="_top">Editar notificações</s-link>
               <s-stack direction="inline" justifyContent="end">
                 <s-button type="submit" variant="primary" loading={navigation.state === "submitting"}>Salvar</s-button>
               </s-stack>
