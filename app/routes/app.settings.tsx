@@ -23,7 +23,11 @@ function boundedInteger(formData: FormData, name: string, min: number, max: numb
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const settings = await prisma.billingRetrySettings.findUnique({ where: { shop: session.shop } });
-  return { settings: settings ?? defaults };
+  const shopHandle = session.shop.replace(/\.myshopify\.com$/i, "");
+  return {
+    settings: settings ?? defaults,
+    notificationsUrl: `https://admin.shopify.com/store/${shopHandle}/settings/notifications/customer`,
+  };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -51,7 +55,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function SettingsPage() {
-  const { settings } = useLoaderData<typeof loader>();
+  const { settings, notificationsUrl } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const shopify = useAppBridge();
@@ -89,7 +93,7 @@ export default function SettingsPage() {
                 <s-option value="CANCEL_AND_NOTIFY">Cancelar assinatura e enviar notificação</s-option>
                 <s-option value="SKIP_AND_NOTIFY">Pular pedido e enviar notificação</s-option>
               </s-select>
-              <s-link href="#notificacoes-pagamento">Editar notificações</s-link>
+              <s-link href={notificationsUrl}>Editar notificações</s-link>
               <s-divider />
               <s-heading>Estoque insuficiente</s-heading>
               <s-grid gridTemplateColumns="1fr 1fr" gap="base">
@@ -113,7 +117,7 @@ export default function SettingsPage() {
                 <s-option value="WEEKLY_SUMMARY">Resumo semanal de falhas de faturamento</s-option>
                 <s-option value="NEVER">Não enviar notificações</s-option>
               </s-select>
-              <s-link href="#notificacoes-equipe">Editar notificações</s-link>
+              <s-link href={notificationsUrl}>Editar notificações</s-link>
               <s-stack direction="inline" justifyContent="end">
                 <s-button type="submit" variant="primary" loading={navigation.state === "submitting"}>Salvar</s-button>
               </s-stack>
