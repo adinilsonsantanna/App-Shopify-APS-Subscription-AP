@@ -26,7 +26,8 @@ function dependencies(overrides: Partial<WebhookForwarderDependencies> = {}) {
     authenticateWebhook: async () => ({
       shop: "known.myshopify.com",
       topic: "SUBSCRIPTION_CONTRACTS_CREATE",
-      payload: { status: "active" },
+      payload: { admin_graphql_api_id: "gid://shopify/SubscriptionContract/1", status: "active" },
+      admin: { graphql: async () => new Response() },
     }),
     fetchFn: (async (input, init) => {
       calls.push({ input, init });
@@ -37,6 +38,17 @@ function dependencies(overrides: Partial<WebhookForwarderDependencies> = {}) {
       API_KEY: "super-secret-api-key",
     },
     now: () => new Date("2026-08-14T12:00:00.000Z"),
+    loadContract: async () => ({
+      id: "gid://shopify/SubscriptionContract/1",
+      status: "ACTIVE",
+      nextBillingAt: "2026-09-14T12:00:00.000Z",
+      currencyCode: "BRL",
+      originOrder: { id: "gid://shopify/Order/1", financialStatus: "PAID", amount: "99.90", currencyCode: "BRL", processedAt: "2026-08-14T12:00:00.000Z" },
+      customer: { id: "gid://shopify/Customer/1", email: "customer@example.test", name: "Customer" },
+      billingPolicy: { interval: "MONTH", intervalCount: 1 },
+      deliveryPolicy: { interval: "MONTH", intervalCount: 1 },
+      lines: [{ id: "gid://shopify/SubscriptionLine/1", productId: "gid://shopify/Product/1", variantId: "gid://shopify/ProductVariant/1", quantity: 1, currentPrice: { amount: "99.90", currencyCode: "BRL" }, sellingPlanId: "gid://shopify/SellingPlan/1" }],
+    }),
     logger: {
       error: (message, metadata) => logs.push({ message, metadata }),
       info: (message, metadata) => logs.push({ message, metadata }),
@@ -64,6 +76,7 @@ test("rejects a topic that does not match the route with 400", async () => {
       shop: "known.myshopify.com",
       topic: "SUBSCRIPTION_CONTRACTS_UPDATE",
       payload: {},
+      admin: { graphql: async () => new Response() },
     }),
   });
   const forward = createShopifyWebhookForwarder(setup.value);
@@ -119,7 +132,17 @@ test("forwards a successful webhook exactly once", async () => {
     shop: "known.myshopify.com",
     topic: "subscription_contracts/create",
     webhookId: "webhook-1",
-    payload: { status: "active" },
+    payload: { admin_graphql_api_id: "gid://shopify/SubscriptionContract/1", status: "active" },
+    contract: {
+      id: "gid://shopify/SubscriptionContract/1",
+      status: "ACTIVE",
+      nextBillingAt: "2026-09-14T12:00:00.000Z",
+      currencyCode: "BRL",
+      originOrder: { id: "gid://shopify/Order/1", financialStatus: "PAID", amount: "99.90", currencyCode: "BRL", processedAt: "2026-08-14T12:00:00.000Z" },
+      customer: { id: "gid://shopify/Customer/1", email: "customer@example.test", name: "Customer" },
+      billingPolicy: { interval: "MONTH", intervalCount: 1 }, deliveryPolicy: { interval: "MONTH", intervalCount: 1 },
+      lines: [{ id: "gid://shopify/SubscriptionLine/1", productId: "gid://shopify/Product/1", variantId: "gid://shopify/ProductVariant/1", quantity: 1, currentPrice: { amount: "99.90", currencyCode: "BRL" }, sellingPlanId: "gid://shopify/SellingPlan/1" }],
+    },
     receivedAt: "2026-08-14T12:00:00.000Z",
   });
 });
@@ -132,6 +155,25 @@ test("does not include secrets in logs", async () => {
   const serializedLogs = JSON.stringify(setup.logs);
   assert.equal(serializedLogs.includes("super-secret-api-key"), false);
   assert.equal(serializedLogs.includes("X-API-Key"), false);
+});
+
+test("enriches subscription_contracts/update", async () => {
+  const setup = dependencies({ authenticateWebhook: async () => ({ shop: "known.myshopify.com", topic: "SUBSCRIPTION_CONTRACTS_UPDATE", payload: { id: 1 }, admin: { graphql: async () => new Response() } }) });
+  await createShopifyWebhookForwarder(setup.value)(request(), "subscription_contracts/update");
+  assert.equal(JSON.parse(String(setup.calls[0]?.init?.body)).contract.id, "gid://shopify/SubscriptionContract/1");
+});
+
+test("returns retryable error and does not forward when GraphQL enrichment fails", async () => {
+  const setup = dependencies({ loadContract: async () => { throw new Error("response containing private data"); } });
+  await rejectsWithStatus(createShopifyWebhookForwarder(setup.value)(request(), "subscription_contracts/create"), 503);
+  assert.equal(setup.calls.length, 0);
+  assert.equal(JSON.stringify(setup.logs).includes("private data"), false);
+});
+
+test("returns retryable error when the contract is not found", async () => {
+  const setup = dependencies({ loadContract: async () => { throw new Error("Shopify contract not found"); } });
+  await rejectsWithStatus(createShopifyWebhookForwarder(setup.value)(request(), "subscription_contracts/create"), 503);
+  assert.equal(setup.calls.length, 0);
 });
 
 test("uninstall forwards to the Central API before deleting sessions", async () => {
