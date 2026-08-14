@@ -178,12 +178,15 @@ function isOwnedApsGroup(group: RawGroup, currentAppId: string) {
   );
 }
 
-export async function listSubscriptionProducts(admin: AdminGraphqlClient): Promise<SubscriptionProduct[]> {
+export async function listSubscriptionProducts(
+  admin: AdminGraphqlClient,
+  search = "",
+): Promise<SubscriptionProduct[]> {
   const data = await executeGraphql<ProductsQuery>(admin, "ListProducts", `#graphql
     ${PLAN_FIELDS}
-    query ApsSubscriptionProducts {
+    query ApsSubscriptionProducts($query: String) {
       currentAppInstallation { app { id } }
-      products(first: 25, sortKey: TITLE) {
+      products(first: 25, sortKey: TITLE, query: $query) {
         nodes {
           id
           title
@@ -197,7 +200,7 @@ export async function listSubscriptionProducts(admin: AdminGraphqlClient): Promi
         }
       }
     }
-  `);
+  `, { query: search || null });
 
   const appId = data.currentAppInstallation.app.id as string;
   return data.products.nodes
@@ -213,7 +216,7 @@ export async function listSubscriptionProducts(admin: AdminGraphqlClient): Promi
         groups,
       };
     })
-    .filter((product: SubscriptionProduct) =>
+    .filter((product: SubscriptionProduct) => search.length > 0 ||
       product.title.toLocaleLowerCase("pt-BR").includes("assinatura") || product.groups.length > 0,
     );
 }
