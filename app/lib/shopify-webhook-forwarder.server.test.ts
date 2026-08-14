@@ -176,6 +176,44 @@ test("returns retryable error when the contract is not found", async () => {
   assert.equal(setup.calls.length, 0);
 });
 
+test("uses one total deadline for authentication and GraphQL", async () => {
+  const budgetMs = 40;
+  const setup = dependencies({
+    budgetMs,
+    authenticateWebhook: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return { shop: "known.myshopify.com", topic: "SUBSCRIPTION_CONTRACTS_CREATE", payload: { id: 1 }, admin: { graphql: async () => new Response() } };
+    },
+    loadContract: async () => new Promise(() => undefined),
+  });
+  const startedAt = performance.now();
+  await rejectsWithStatus(createShopifyWebhookForwarder(setup.value)(request(), "subscription_contracts/create"), 503);
+  const elapsed = performance.now() - startedAt;
+  assert.ok(elapsed >= budgetMs - 10);
+  assert.ok(elapsed < budgetMs + 100, `elapsed ${elapsed}ms exceeded the shared deadline tolerance`);
+  assert.equal(setup.calls.length, 0);
+});
+
+test("aborts Central API forwarding at the shared deadline", async () => {
+  const budgetMs = 40;
+  let signalWasAborted = false;
+  const setup = dependencies({
+    budgetMs,
+    fetchFn: (async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      signal?.addEventListener("abort", () => {
+        signalWasAborted = true;
+        reject(new DOMException("Aborted", "AbortError"));
+      }, { once: true });
+    })) as typeof fetch,
+  });
+  const startedAt = performance.now();
+  await rejectsWithStatus(createShopifyWebhookForwarder(setup.value)(request(), "subscription_contracts/create"), 503);
+  const elapsed = performance.now() - startedAt;
+  assert.equal(signalWasAborted, true);
+  assert.ok(elapsed < budgetMs + 100, `elapsed ${elapsed}ms exceeded the shared deadline tolerance`);
+});
+
 test("uninstall forwards to the Central API before deleting sessions", async () => {
   const order: string[] = [];
   const response = await processAppUninstalledWebhook(request(), {
