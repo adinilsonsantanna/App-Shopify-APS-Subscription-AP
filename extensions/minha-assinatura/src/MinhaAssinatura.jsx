@@ -1,6 +1,6 @@
 /* eslint-disable react/prop-types */
 import "@shopify/ui-extensions/preact";
-import {render} from "preact";
+import {Component, render} from "preact";
 import {useCallback, useEffect, useState} from "preact/hooks";
 
 const API_VERSION = "2026-07";
@@ -76,21 +76,56 @@ const STATUS_LABELS = {
   FAILED: "Falha",
   EXPIRED: "Expirada",
   PENDING: "Pendente",
+  STALE: "Desatualizada",
 };
 
+// Em Customer Account UI Extensions 2026-07, s-badge aceita
+// auto, neutral e critical.
 const STATUS_TONES = {
-  ACTIVE: "success",
-  PAUSED: "warning",
+  ACTIVE: "neutral",
+  PAUSED: "neutral",
   CANCELLED: "critical",
   CANCELED: "critical",
   FAILED: "critical",
   EXPIRED: "neutral",
-  PENDING: "info",
+  PENDING: "neutral",
+  STALE: "neutral",
 };
 
 export default async () => {
-  render(<MinhaAssinatura />, document.body);
+  render(
+    <ExtensionErrorBoundary>
+      <MinhaAssinatura />
+    </ExtensionErrorBoundary>,
+    document.body,
+  );
 };
+
+class ExtensionErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = {error: null};
+  }
+
+  componentDidCatch(error) {
+    console.error("Minha Assinatura render error", error);
+    this.setState({error});
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <s-page heading="Minha Assinatura">
+          <s-banner tone="critical">
+            Não foi possível exibir suas assinaturas agora. Tente recarregar a página.
+          </s-banner>
+        </s-page>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 async function customerAccountRequest(query, variables = {}) {
   const response = await fetch(API_URL, {
@@ -100,8 +135,13 @@ async function customerAccountRequest(query, variables = {}) {
   });
 
   if (!response.ok) throw new Error(`Customer Account API: ${response.status}`);
+
   const result = await response.json();
-  if (result.errors?.length) throw new Error(result.errors[0].message);
+
+  if (result.errors?.length) {
+    throw new Error(result.errors[0].message);
+  }
+
   return result.data;
 }
 
@@ -118,8 +158,9 @@ function MinhaAssinatura() {
       const data = await customerAccountRequest(SUBSCRIPTIONS_QUERY);
       setContracts(data?.customer?.subscriptionContracts?.nodes ?? []);
     } catch (error) {
-      console.error(error);
+      console.error("Minha Assinatura API error", error);
       setLoadError(true);
+      setContracts([]);
     }
   }, []);
 
@@ -128,32 +169,52 @@ function MinhaAssinatura() {
   }, [loadContracts]);
 
   async function manageContract(action, contract) {
+    if (!contract?.id) return;
+
     setPendingId(contract.id);
     setFeedback(null);
+
     try {
       const data = await customerAccountRequest(MUTATIONS[action], {
         subscriptionContractId: contract.id,
       });
-      const payload = data[`subscriptionContract${capitalize(action)}`];
+
+      const payload = data?.[`subscriptionContract${capitalize(action)}`];
+
+      if (!payload) {
+        throw new Error("A Shopify não retornou o resultado da operação.");
+      }
+
       if (payload.userErrors?.length) {
-        throw new Error(payload.userErrors.map(({message}) => message).join(" "));
+        throw new Error(
+          payload.userErrors.map(({message}) => message).join(" "),
+        );
       }
 
       setContracts((current) =>
-        current.map((item) =>
-          item.id === contract.id ? {...item, status: payload.contract.status} : item,
+        (current ?? []).map((item) =>
+          item.id === contract.id
+            ? {...item, status: payload.contract?.status ?? item.status}
+            : item,
         ),
       );
+
       if (action === "cancel") {
         document.getElementById("cancel-subscription")?.hideOverlay();
       }
+
       setCancelContract(null);
-      setFeedback({tone: "success", message: successMessage(action)});
+      setFeedback({
+        tone: "success",
+        message: successMessage(action),
+      });
     } catch (error) {
-      console.error(error);
+      console.error("Minha Assinatura mutation error", error);
       setFeedback({
         tone: "critical",
-        message: error.message || "Não foi possível atualizar a assinatura. Tente novamente.",
+        message:
+          error?.message ||
+          "Não foi possível atualizar a assinatura. Tente novamente.",
       });
     } finally {
       setPendingId(null);
@@ -165,27 +226,33 @@ function MinhaAssinatura() {
       heading="Minha Assinatura"
       subheading="Gerencie seus planos, próximas cobranças e preferências de assinatura."
     >
-      {feedback && <s-banner tone={feedback.tone}>{feedback.message}</s-banner>}
-
-      {contracts === null && !loadError && (
-        <s-stack direction="inline" gap="base" alignItems="center">
-          <s-spinner accessibilityLabel="Carregando assinaturas" />
-          <s-text>Carregando suas assinaturas...</s-text>
-        </s-stack>
-      )}
-
-      {loadError && (
-        <s-banner tone="critical">
-          Não foi possível carregar suas assinaturas. Tente novamente.
-          <s-button slot="secondary-actions" onClick={loadContracts}>Tentar novamente</s-button>
-        </s-banner>
-      )}
-
-      {contracts?.length === 0 && (
-        <s-section><s-text>Você ainda não possui assinaturas.</s-text></s-section>
-      )}
-
       <s-stack direction="block" gap="base">
+        {feedback && (
+          <s-banner tone={feedback.tone}>{feedback.message}</s-banner>
+        )}
+
+        {contracts === null && !loadError && (
+          <s-stack direction="inline" gap="base" alignItems="center">
+            <s-spinner accessibilityLabel="Carregando assinaturas" />
+            <s-text>Carregando suas assinaturas...</s-text>
+          </s-stack>
+        )}
+
+        {loadError && (
+          <s-stack direction="block" gap="small">
+            <s-banner tone="critical">
+              Não foi possível carregar suas assinaturas. Tente novamente.
+            </s-banner>
+            <s-button onClick={loadContracts}>Tentar novamente</s-button>
+          </s-stack>
+        )}
+
+        {!loadError && contracts?.length === 0 && (
+          <s-section>
+            <s-text>Você ainda não possui assinaturas.</s-text>
+          </s-section>
+        )}
+
         {contracts?.map((contract) => (
           <ContractCard
             key={contract.id}
@@ -199,31 +266,43 @@ function MinhaAssinatura() {
       </s-stack>
 
       <s-modal id="cancel-subscription" heading="Cancelar assinatura">
-        <s-stack direction="block" gap="base">
-          <s-text>
-            Tem certeza que deseja cancelar esta assinatura? Esta ação interromperá as próximas cobranças.
-          </s-text>
-          <s-button-group>
-            <s-button commandFor="cancel-subscription" command="--hide" onClick={() => setCancelContract(null)}>Voltar</s-button>
-            <s-button
-              variant="primary"
-              tone="critical"
-              disabled={!cancelContract || pendingId === cancelContract?.id}
-              loading={pendingId === cancelContract?.id}
-              onClick={() => manageContract("cancel", cancelContract)}
-            >
-              Confirmar cancelamento
-            </s-button>
-          </s-button-group>
-        </s-stack>
+        <s-paragraph>
+          Tem certeza que deseja cancelar esta assinatura? Esta ação interromperá
+          as próximas cobranças.
+        </s-paragraph>
+
+        <s-button
+          slot="secondary-actions"
+          commandFor="cancel-subscription"
+          command="--hide"
+          onClick={() => setCancelContract(null)}
+        >
+          Voltar
+        </s-button>
+
+        <s-button
+          slot="primary-action"
+          variant="primary"
+          tone="critical"
+          disabled={!cancelContract || pendingId === cancelContract?.id}
+          loading={pendingId === cancelContract?.id}
+          onClick={() => manageContract("cancel", cancelContract)}
+        >
+          Confirmar cancelamento
+        </s-button>
       </s-modal>
     </s-page>
   );
 }
 
 function ContractCard({contract, busy, onPause, onActivate, onCancel}) {
-  const total = contract.lines.nodes.reduce(
-    (sum, line) => sum + Number(line.currentPrice.amount) * line.quantity,
+  const lines = contract?.lines?.nodes ?? [];
+
+  const total = lines.reduce(
+    (sum, line) =>
+      sum +
+      Number(line?.currentPrice?.amount ?? 0) *
+        Number(line?.quantity ?? 0),
     0,
   );
 
@@ -234,28 +313,66 @@ function ContractCard({contract, busy, onPause, onActivate, onCancel}) {
           {STATUS_LABELS[contract.status] ?? contract.status}
         </s-badge>
 
-        {contract.lines.nodes.map((line) => (
+        {lines.map((line) => (
           <s-stack key={line.id} direction="block" gap="small">
-            <s-heading>{line.title}{line.variantTitle ? ` — ${line.variantTitle}` : ""}</s-heading>
+            <s-heading>
+              {line.title}
+              {line.variantTitle ? ` — ${line.variantTitle}` : ""}
+            </s-heading>
+
             <s-text>Quantidade: {line.quantity}</s-text>
-            <s-text>{formatMoney(line.currentPrice.amount, line.currentPrice.currencyCode)}</s-text>
+
+            {line.currentPrice && (
+              <s-text>
+                {formatMoney(
+                  line.currentPrice.amount,
+                  line.currentPrice.currencyCode,
+                )}
+              </s-text>
+            )}
           </s-stack>
         ))}
 
-        <s-text type="strong">Total: {formatMoney(total, contract.currencyCode)}</s-text>
-        <s-text>{formatFrequency("Cobrança", contract.billingPolicy)}</s-text>
-        <s-text>{formatFrequency("Entrega", contract.deliveryPolicy)}</s-text>
-        <s-text>
-          Próxima cobrança: {contract.nextBillingDate ? formatDate(contract.nextBillingDate) : "Não disponível"}
+        <s-text type="strong">
+          Total: {formatMoney(total, contract.currencyCode)}
         </s-text>
 
-        {(contract.status === "ACTIVE" || contract.status === "PAUSED") && (
+        <s-text>
+          {formatFrequency("Cobrança", contract.billingPolicy)}
+        </s-text>
+
+        <s-text>
+          {formatFrequency("Entrega", contract.deliveryPolicy)}
+        </s-text>
+
+        <s-text>
+          Próxima cobrança:{" "}
+          {contract.nextBillingDate
+            ? formatDate(contract.nextBillingDate)
+            : "Não disponível"}
+        </s-text>
+
+        {(contract.status === "ACTIVE" ||
+          contract.status === "PAUSED") && (
           <s-button-group>
             {contract.status === "ACTIVE" ? (
-              <s-button disabled={busy} loading={busy} onClick={onPause}>Pausar assinatura</s-button>
+              <s-button
+                disabled={busy}
+                loading={busy}
+                onClick={onPause}
+              >
+                Pausar assinatura
+              </s-button>
             ) : (
-              <s-button disabled={busy} loading={busy} onClick={onActivate}>Retomar assinatura</s-button>
+              <s-button
+                disabled={busy}
+                loading={busy}
+                onClick={onActivate}
+              >
+                Retomar assinatura
+              </s-button>
             )}
+
             <s-button
               tone="critical"
               disabled={busy}
@@ -285,21 +402,41 @@ function successMessage(action) {
 }
 
 function formatMoney(amount, currencyCode) {
-  return new Intl.NumberFormat("pt-BR", {style: "currency", currency: currencyCode}).format(Number(amount));
+  try {
+    return new Intl.NumberFormat("pt-BR", {
+      style: "currency",
+      currency: currencyCode || "BRL",
+    }).format(Number(amount ?? 0));
+  } catch {
+    return `${currencyCode || "BRL"} ${Number(amount ?? 0).toFixed(2)}`;
+  }
 }
 
 function formatDate(value) {
-  return new Intl.DateTimeFormat("pt-BR", {timeZone: "UTC"}).format(new Date(value));
+  try {
+    return new Intl.DateTimeFormat("pt-BR", {
+      timeZone: "UTC",
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
 }
 
 function formatFrequency(label, policy) {
-  if (!policy) return `${label}: não disponível`;
-  const count = Number(policy.intervalCount.count);
+  if (!policy?.interval) {
+    return `${label}: não disponível`;
+  }
+
+  const count = Number(policy?.intervalCount?.count ?? 1);
+
   const units = {
     DAY: count === 1 ? "dia" : "dias",
     WEEK: count === 1 ? "semana" : "semanas",
     MONTH: count === 1 ? "mês" : "meses",
     YEAR: count === 1 ? "ano" : "anos",
   };
-  return `${label} a cada ${count} ${units[policy.interval] ?? policy.interval.toLowerCase()}`;
+
+  return `${label} a cada ${count} ${
+    units[policy.interval] ?? String(policy.interval).toLowerCase()
+  }`;
 }
