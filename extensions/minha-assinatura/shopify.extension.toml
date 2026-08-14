@@ -1,0 +1,14 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Minha Assinatura"
+handle = "minha-assinatura"
+uid = "14792742-79eb-bbfa-1469-c148fb762c9f26b82660"
+type = "ui_extension"
+
+[[extensions.targeting]]
+module = "./src/MinhaAssinatura.jsx"
+target = "customer-account.page.render"
+
+[extensions.capabilities]
+api_access = true
