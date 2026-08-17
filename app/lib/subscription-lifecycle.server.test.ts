@@ -11,6 +11,7 @@ function dependencies(result: unknown = { data: { subscriptionContractPause: { c
 
 test("requires a valid API key", async () => { const deps = dependencies(); assert.equal((await handleSubscriptionLifecycle(request(valid, "wrong"), deps.value)).status, 403); assert.equal(deps.calls.length, 0); });
 test("validates shop, contract and request ID", async () => { for (const body of [{ ...valid, shop: "evil.example.com" }, { ...valid, contractId: "sub_123" }, { ...valid, requestId: "" }]) assert.equal((await handleSubscriptionLifecycle(request(body), dependencies().value)).status, 400); });
+test("accepts only SubscriptionActor values from Shopify 2026-07", async () => { for (const actor of ["CUSTOMER", "MERCHANT", "PARTNER"]) { const deps = dependencies(); assert.equal((await handleSubscriptionLifecycle(request({ ...valid, actor }), deps.value)).status, 200); } for (const actor of ["SYSTEM", "STAFF", "APP", ""]) assert.equal((await handleSubscriptionLifecycle(request({ ...valid, actor }), dependencies().value)).status, 400); });
 test("returns controlled error when offline session is absent", async () => { const response = await handleSubscriptionLifecycle(request(), { apiKey: "secret", getAdmin: async () => ({ admin: {} as never }) }); assert.equal(response.status, 404); });
 test("executes pause, resume and cancel with actor", async () => {
   for (const [action, field, status] of [["pause", "subscriptionContractPause", "PAUSED"], ["resume", "subscriptionContractActivate", "ACTIVE"], ["cancel", "subscriptionContractCancel", "CANCELLED"]] as const) {
