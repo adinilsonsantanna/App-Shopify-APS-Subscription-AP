@@ -1,7 +1,11 @@
 /* eslint-disable react/prop-types */
 import "@shopify/ui-extensions/preact";
 import {Component, render} from "preact";
-import {useCallback, useEffect, useState} from "preact/hooks";
+import {useCallback, useEffect, useRef, useState} from "preact/hooks";
+import {
+  createLatestRequestCoordinator,
+  customerAccountRequest as requestCustomerAccount,
+} from "./customer-account-request.js";
 import {
   contractActions,
   mutationErrorFeedback,
@@ -101,35 +105,15 @@ export default async () => bootstrapExtension(document.body);
 
 export function bootstrapExtension(root) {
   try {
-    render(<InitializationShell />, root);
+    render(
+      <ExtensionErrorBoundary>
+        <MinhaAssinatura />
+      </ExtensionErrorBoundary>,
+      root,
+    );
   } catch (error) {
     renderInitializationError(root, error);
-    return;
   }
-
-  queueMicrotask(() => {
-    try {
-      render(
-        <ExtensionErrorBoundary>
-          <MinhaAssinatura />
-        </ExtensionErrorBoundary>,
-        root,
-      );
-    } catch (error) {
-      renderInitializationError(root, error);
-    }
-  });
-}
-
-function InitializationShell() {
-  return (
-    <s-page heading="Minha Assinatura">
-      <s-stack direction="inline" gap="base" alignItems="center">
-        <s-spinner accessibilityLabel="Carregando assinaturas" />
-        <s-text>Carregando suas assinaturas...</s-text>
-      </s-stack>
-    </s-page>
-  );
 }
 
 function renderInitializationError(root, error) {
@@ -172,21 +156,7 @@ class ExtensionErrorBoundary extends Component {
 }
 
 async function customerAccountRequest(query, variables = {}) {
-  const response = await fetch(API_URL, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({query, variables}),
-  });
-
-  if (!response.ok) throw new Error(`Customer Account API: ${response.status}`);
-
-  const result = await response.json();
-
-  if (result.errors?.length) {
-    throw new Error(result.errors[0].message);
-  }
-
-  return result.data;
+  return requestCustomerAccount(API_URL, query, variables);
 }
 
 function MinhaAssinatura() {
@@ -195,22 +165,33 @@ function MinhaAssinatura() {
   const [pendingId, setPendingId] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [cancelContract, setCancelContract] = useState(null);
+  const loadCoordinator = useRef(null);
+  if (!loadCoordinator.current) {
+    loadCoordinator.current = createLatestRequestCoordinator();
+  }
   const pageState = resolvePageState(contracts, loadError);
 
-  const loadContracts = useCallback(async () => {
-    try {
-      setLoadError(false);
-      const data = await customerAccountRequest(SUBSCRIPTIONS_QUERY);
-      setContracts(data?.customer?.subscriptionContracts?.nodes ?? []);
-    } catch (error) {
-      console.error("Minha Assinatura API error", error);
-      setLoadError(true);
-      setContracts([]);
-    }
+  const loadContracts = useCallback(() => {
+    return loadCoordinator.current.run({
+      request: () => customerAccountRequest(SUBSCRIPTIONS_QUERY),
+      onLoading: () => {
+        setLoadError(false);
+        setContracts(null);
+      },
+      onSuccess: (data) => {
+        setContracts(data?.customer?.subscriptionContracts?.nodes ?? []);
+      },
+      onError: (error) => {
+        console.error("Minha Assinatura API error", error);
+        setLoadError(true);
+        setContracts([]);
+      },
+    });
   }, []);
 
   useEffect(() => {
-    loadContracts();
+    void loadContracts();
+    return () => loadCoordinator.current.invalidate();
   }, [loadContracts]);
 
   async function manageContract(action, contract) {
@@ -283,7 +264,9 @@ function MinhaAssinatura() {
             <s-banner tone="critical">
               Não foi possível carregar suas assinaturas. Tente novamente.
             </s-banner>
-            <s-button onClick={loadContracts}>Tentar novamente</s-button>
+            <s-button onClick={() => void loadContracts()}>
+              Tentar novamente
+            </s-button>
           </s-stack>
         )}
 
