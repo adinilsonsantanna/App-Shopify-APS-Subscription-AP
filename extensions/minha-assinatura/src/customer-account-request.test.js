@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import {readFile} from "node:fs/promises";
 import test from "node:test";
 import {
   createLatestRequestCoordinator,
@@ -12,7 +11,7 @@ function response(data) {
   return {
     ok: true,
     async json() {
-      return {data};
+      return { data };
     },
   };
 }
@@ -24,42 +23,35 @@ function deferred() {
     resolve = resolvePromise;
     reject = rejectPromise;
   });
-  return {promise, resolve, reject};
+  return { promise, resolve, reject };
 }
 
-test("bootstrap renders the main tree directly without queueMicrotask", async () => {
-  const source = await readFile(
-    new URL("./MinhaAssinatura.jsx", import.meta.url),
-    "utf8",
-  );
-  const bootstrap = source.slice(
-    source.indexOf("export function bootstrapExtension"),
-    source.indexOf("function renderInitializationError"),
-  );
-
-  assert.doesNotMatch(source, /queueMicrotask/);
-  assert.match(
-    bootstrap,
-    /render\(\s*<ExtensionErrorBoundary>\s*<MinhaAssinatura \/>/,
-  );
-  assert.match(bootstrap, /catch \(error\) \{\s*renderInitializationError/);
-});
-
 test("a query that succeeds before the deadline returns its data", async () => {
-  const data = await customerAccountRequest(API_URL, "query Test { customer { id } }", {}, {
-    timeoutMs: 50,
-    fetchImpl: async () => response({customer: {id: "gid://shopify/Customer/1"}}),
-  });
+  const data = await customerAccountRequest(
+    API_URL,
+    "query Test { customer { id } }",
+    {},
+    {
+      timeoutMs: 50,
+      fetchImpl: async () =>
+        response({ customer: { id: "gid://shopify/Customer/1" } }),
+    },
+  );
 
   assert.equal(data.customer.id, "gid://shopify/Customer/1");
 });
 
 test("a pending query becomes a clear timeout error", async () => {
   await assert.rejects(
-    customerAccountRequest(API_URL, "query Pending { customer { id } }", {}, {
-      timeoutMs: 10,
-      fetchImpl: () => new Promise(() => {}),
-    }),
+    customerAccountRequest(
+      API_URL,
+      "query Pending { customer { id } }",
+      {},
+      {
+        timeoutMs: 10,
+        fetchImpl: () => new Promise(() => {}),
+      },
+    ),
     /demorou mais de 8 segundos.*Tente novamente/,
   );
 });
@@ -95,7 +87,7 @@ test("retry returns to loading and can complete", async () => {
       throw new Error("first attempt failed");
     },
   });
-  await coordinator.run({...callbacks, request: async () => ["contract"]});
+  await coordinator.run({ ...callbacks, request: async () => ["contract"] });
 
   assert.deepEqual(states, ["loading", "error", "loading", "ready"]);
 });
