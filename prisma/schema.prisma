@@ -28,14 +28,29 @@ model Session {
 }
 
 model BillingRetrySettings {
-  shop                         String   @id
-  paymentRetryAttempts         Int      @default(3)
-  paymentRetryDays             Int      @default(2)
-  paymentFailureAction         String   @default("PAUSE_AND_NOTIFY")
-  inventoryRetryAttempts       Int      @default(5)
-  inventoryRetryDays           Int      @default(1)
-  inventoryFailureAction       String   @default("SKIP_AND_NOTIFY")
-  teamNotificationFrequency    String   @default("WEEKLY_SUMMARY")
-  createdAt                    DateTime @default(now())
-  updatedAt                    DateTime @updatedAt
+  shop                      String   @id
+  paymentRetryAttempts      Int      @default(3)
+  paymentRetryDays          Int      @default(2)
+  paymentFailureAction      String   @default("PAUSE_AND_NOTIFY")
+  inventoryRetryAttempts    Int      @default(5)
+  inventoryRetryDays        Int      @default(1)
+  inventoryFailureAction    String   @default("SKIP_AND_NOTIFY")
+  teamNotificationFrequency String   @default("WEEKLY_SUMMARY")
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+}
+
+model RecurringOrderRequest {
+  idempotencyKey String   @id
+  shop           String
+  invoiceId      String
+  payloadHash    String
+  status         String
+  shopifyOrderId String?
+  leaseExpiresAt DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([shop, invoiceId])
+  @@index([status, leaseExpiresAt])
 }

@@ -2,7 +2,7 @@
   "name": "aps-subscription-api",
   "private": true,
   "scripts": {
-    "build": "prisma generate && prisma migrate deploy && react-router build",
+    "build": "prisma generate && react-router build",
     "dev": "shopify app dev",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
@@ -19,7 +19,7 @@
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
     "typecheck": "react-router typegen && tsc --noEmit",
-    "test": "tsx --test app/lib/shopify-webhook-forwarder.server.test.ts"
+    "test": "tsx --test app/lib/*.server.test.ts"
   },
   "type": "module",
   "engines": {
