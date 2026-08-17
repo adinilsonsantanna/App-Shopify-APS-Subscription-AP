@@ -229,8 +229,6 @@ export function bootstrapExtension(
 
   function openCancelConfirmation(contract) {
     state.cancelContract = contract;
-    renderPage();
-    documentRef.getElementById("cancel-subscription")?.showOverlay?.();
   }
 
   function renderCancelModal(documentForModal) {
@@ -264,13 +262,11 @@ export function bootstrapExtension(
     );
     setBusy(
       confirmButton,
-      Boolean(
-        !state.cancelContract || state.pendingId === state.cancelContract?.id,
-      ),
-      Boolean(state.pendingId === state.cancelContract?.id),
+      Boolean(state.pendingId),
+      Boolean(state.pendingId),
     );
     confirmButton.addEventListener("click", () => {
-      if (state.cancelContract) {
+      if (state.cancelContract && !state.pendingId) {
         void manageContract("cancel", state.cancelContract);
       }
     });
@@ -462,6 +458,8 @@ function renderContract(documentRef, contract, { busy, onAction, onCancel }) {
         slot: "secondary-actions",
         variant: "secondary",
         tone: "critical",
+        command: "--show",
+        commandFor: "cancel-subscription",
       },
     );
     setBusy(cancelButton, busy, false);

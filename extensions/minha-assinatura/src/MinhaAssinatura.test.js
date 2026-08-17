@@ -41,10 +41,13 @@ class FakeElement {
 
   click() {
     this.listeners.get("click")?.({ currentTarget: this });
-  }
-
-  showOverlay() {
-    this.overlayShown = true;
+    const command = this.getAttribute("command");
+    const commandFor = this.getAttribute("commandFor");
+    const target = commandFor
+      ? this.ownerDocument.getElementById(commandFor)
+      : null;
+    if (command === "--show" && target) target.overlayShown = true;
+    if (command === "--hide" && target) target.overlayShown = false;
   }
 
   hideOverlay() {
@@ -252,29 +255,45 @@ test("cancel requires confirmation and sends the preserved mutation", async () =
   const documentRef = new FakeDocument();
   const currentContract = contract("ACTIVE");
   const calls = [];
+  const cancelMutation = deferred();
   const controller = bootstrapExtension(documentRef.body, {
     documentRef,
     request: async (query, variables) => {
       calls.push({ query, variables });
       if (query === SUBSCRIPTIONS_QUERY) return dataWith([currentContract]);
-      return {
-        subscriptionContractCancel: {
-          contract: { id: currentContract.id, status: "CANCELLED" },
-          userErrors: [],
-        },
-      };
+      return cancelMutation.promise;
     },
   });
   await controller.ready;
 
+  const page = documentRef.body.children[0];
+  const modal = documentRef.getElementById("cancel-subscription");
   const cancelButton = findByText(documentRef.body, "Cancelar assinatura");
   assert.equal(cancelButton.getAttribute("slot"), "secondary-actions");
   assert.equal(cancelButton.getAttribute("variant"), "secondary");
   assert.equal(cancelButton.getAttribute("tone"), "critical");
+  assert.equal(cancelButton.getAttribute("command"), "--show");
+  assert.equal(
+    cancelButton.getAttribute("commandFor"),
+    "cancel-subscription",
+  );
   cancelButton.click();
-  const modal = documentRef.getElementById("cancel-subscription");
+  assert.equal(controller.state.cancelContract, currentContract);
+  assert.equal(documentRef.body.children[0], page);
+  assert.equal(documentRef.getElementById("cancel-subscription"), modal);
   assert.equal(modal.overlayShown, true);
-  findByText(modal, "Confirmar cancelamento").click();
+  const confirmButton = findByText(modal, "Confirmar cancelamento");
+  assert.equal(confirmButton.getAttribute("disabled"), null);
+  confirmButton.click();
+  confirmButton.click();
+  assert.equal(calls.length, 2);
+
+  cancelMutation.resolve({
+    subscriptionContractCancel: {
+      contract: { id: currentContract.id, status: "CANCELLED" },
+      userErrors: [],
+    },
+  });
   await flushPromises();
 
   assert.equal(calls.length, 2);
@@ -286,6 +305,31 @@ test("cancel requires confirmation and sends the preserved mutation", async () =
     documentRef.body.textContent,
     /Assinatura cancelada com sucesso/,
   );
+});
+
+test("back closes the modal without executing cancel", async () => {
+  const documentRef = new FakeDocument();
+  const currentContract = contract("ACTIVE");
+  const calls = [];
+  const controller = bootstrapExtension(documentRef.body, {
+    documentRef,
+    request: async (query) => {
+      calls.push({ query });
+      return dataWith([currentContract]);
+    },
+  });
+  await controller.ready;
+
+  findByText(documentRef.body, "Cancelar assinatura").click();
+  const modal = documentRef.getElementById("cancel-subscription");
+  const backButton = findByText(modal, "Voltar");
+  assert.equal(backButton.getAttribute("command"), "--hide");
+  assert.equal(backButton.getAttribute("commandFor"), "cancel-subscription");
+  backButton.click();
+
+  assert.equal(modal.overlayShown, false);
+  assert.equal(controller.state.cancelContract, null);
+  assert.equal(calls.length, 1);
 });
 
 test("a stale query cannot overwrite a newer retry", async () => {
