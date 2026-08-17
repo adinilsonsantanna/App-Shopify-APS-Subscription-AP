@@ -15,7 +15,6 @@ class FakeElement {
     this.children = [];
     this.listeners = new Map();
     this.ownText = "";
-    this.overlayShown = false;
   }
 
   setAttribute(name, value) {
@@ -41,17 +40,6 @@ class FakeElement {
 
   click() {
     this.listeners.get("click")?.({ currentTarget: this });
-    const command = this.getAttribute("command");
-    const commandFor = this.getAttribute("commandFor");
-    const target = commandFor
-      ? this.ownerDocument.getElementById(commandFor)
-      : null;
-    if (command === "--show" && target) target.overlayShown = true;
-    if (command === "--hide" && target) target.overlayShown = false;
-  }
-
-  hideOverlay() {
-    this.overlayShown = false;
   }
 
   set textContent(value) {
@@ -90,10 +78,12 @@ function findByText(root, text) {
 
 function deferred() {
   let resolve;
-  const promise = new Promise((resolvePromise) => {
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 async function flushPromises() {
@@ -254,35 +244,66 @@ for (const [action, initialStatus, resultingStatus, mutationName] of [
 test("cancel requires confirmation and sends the preserved mutation", async () => {
   const documentRef = new FakeDocument();
   const currentContract = contract("ACTIVE");
+  const otherContract = {
+    ...contract("ACTIVE"),
+    id: "gid://shopify/SubscriptionContract/2",
+    lines: {
+      nodes: [
+        {
+          ...contract("ACTIVE").lines.nodes[0],
+          id: "line-2",
+          title: "Outro produto",
+        },
+      ],
+    },
+  };
   const calls = [];
   const cancelMutation = deferred();
   const controller = bootstrapExtension(documentRef.body, {
     documentRef,
     request: async (query, variables) => {
       calls.push({ query, variables });
-      if (query === SUBSCRIPTIONS_QUERY) return dataWith([currentContract]);
+      if (query === SUBSCRIPTIONS_QUERY) {
+        return dataWith([currentContract, otherContract]);
+      }
       return cancelMutation.promise;
     },
   });
   await controller.ready;
 
-  const page = documentRef.body.children[0];
-  const modal = documentRef.getElementById("cancel-subscription");
   const cancelButton = findByText(documentRef.body, "Cancelar assinatura");
   assert.equal(cancelButton.getAttribute("slot"), "secondary-actions");
   assert.equal(cancelButton.getAttribute("variant"), "secondary");
   assert.equal(cancelButton.getAttribute("tone"), "critical");
-  assert.equal(cancelButton.getAttribute("command"), "--show");
-  assert.equal(
-    cancelButton.getAttribute("commandFor"),
-    "cancel-subscription",
-  );
   cancelButton.click();
+
+  const confirmationText =
+    "Tem certeza que deseja cancelar esta assinatura? Esta ação interromperá as próximas cobranças.";
   assert.equal(controller.state.cancelContract, currentContract);
-  assert.equal(documentRef.body.children[0], page);
-  assert.equal(documentRef.getElementById("cancel-subscription"), modal);
-  assert.equal(modal.overlayShown, true);
-  const confirmButton = findByText(modal, "Confirmar cancelamento");
+  assert.equal(calls.length, 1);
+  assert.equal(
+    walk(documentRef.body).filter(
+      (element) => element.ownText === confirmationText,
+    ).length,
+    1,
+  );
+  const sections = walk(documentRef.body).filter(
+    (element) => element.tagName === "s-section",
+  );
+  assert.match(sections[0].textContent, /Tem certeza que deseja cancelar/);
+  assert.doesNotMatch(sections[0].textContent, /Pausar assinatura/);
+  assert.doesNotMatch(sections[0].textContent, /Cancelar assinatura/);
+  assert.match(sections[1].textContent, /Outro produto/);
+  assert.match(sections[1].textContent, /Pausar assinatura/);
+  assert.match(sections[1].textContent, /Cancelar assinatura/);
+
+  const backButton = findByText(sections[0], "Voltar");
+  assert.equal(backButton.getAttribute("slot"), "secondary-actions");
+  assert.equal(backButton.getAttribute("variant"), "secondary");
+  const confirmButton = findByText(sections[0], "Confirmar cancelamento");
+  assert.equal(confirmButton.getAttribute("slot"), "primary-action");
+  assert.equal(confirmButton.getAttribute("variant"), "primary");
+  assert.equal(confirmButton.getAttribute("tone"), "critical");
   assert.equal(confirmButton.getAttribute("disabled"), null);
   confirmButton.click();
   confirmButton.click();
@@ -305,9 +326,15 @@ test("cancel requires confirmation and sends the preserved mutation", async () =
     documentRef.body.textContent,
     /Assinatura cancelada com sucesso/,
   );
+  assert.match(documentRef.body.textContent, /Cancelada/);
+  const updatedSections = walk(documentRef.body).filter(
+    (element) => element.tagName === "s-section",
+  );
+  assert.doesNotMatch(updatedSections[0].textContent, /Pausar assinatura/);
+  assert.doesNotMatch(updatedSections[0].textContent, /Cancelar assinatura/);
 });
 
-test("back closes the modal without executing cancel", async () => {
+test("back closes inline confirmation without executing cancel", async () => {
   const documentRef = new FakeDocument();
   const currentContract = contract("ACTIVE");
   const calls = [];
@@ -321,15 +348,42 @@ test("back closes the modal without executing cancel", async () => {
   await controller.ready;
 
   findByText(documentRef.body, "Cancelar assinatura").click();
-  const modal = documentRef.getElementById("cancel-subscription");
-  const backButton = findByText(modal, "Voltar");
-  assert.equal(backButton.getAttribute("command"), "--hide");
-  assert.equal(backButton.getAttribute("commandFor"), "cancel-subscription");
-  backButton.click();
+  findByText(documentRef.body, "Voltar").click();
 
-  assert.equal(modal.overlayShown, false);
   assert.equal(controller.state.cancelContract, null);
   assert.equal(calls.length, 1);
+  assert.doesNotMatch(documentRef.body.textContent, /Tem certeza que deseja/);
+  assert.match(documentRef.body.textContent, /Cancelar assinatura/);
+});
+
+test("cancel error keeps confirmation coherent and shows feedback", async () => {
+  const documentRef = new FakeDocument();
+  const currentContract = contract("ACTIVE");
+  const calls = [];
+  const cancelMutation = deferred();
+  const controller = bootstrapExtension(documentRef.body, {
+    documentRef,
+    request: async (query, variables) => {
+      calls.push({ query, variables });
+      if (query === SUBSCRIPTIONS_QUERY) return dataWith([currentContract]);
+      return cancelMutation.promise;
+    },
+  });
+  await controller.ready;
+
+  findByText(documentRef.body, "Cancelar assinatura").click();
+  findByText(documentRef.body, "Confirmar cancelamento").click();
+  cancelMutation.reject(new Error("Falha ao cancelar"));
+  await flushPromises();
+
+  assert.equal(calls.length, 2);
+  assert.equal(controller.state.cancelContract, currentContract);
+  assert.equal(controller.state.pendingId, null);
+  assert.match(documentRef.body.textContent, /Falha ao cancelar/);
+  assert.match(documentRef.body.textContent, /Tem certeza que deseja cancelar/);
+  const confirmButton = findByText(documentRef.body, "Confirmar cancelamento");
+  assert.equal(confirmButton.getAttribute("disabled"), null);
+  assert.equal(confirmButton.getAttribute("loading"), null);
 });
 
 test("a stale query cannot overwrite a newer retry", async () => {

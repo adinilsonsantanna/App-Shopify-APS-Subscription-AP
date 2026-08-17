@@ -153,15 +153,17 @@ export function bootstrapExtension(
           content.appendChild(
             renderContract(documentRef, contract, {
               busy: state.pendingId === contract.id,
+              confirming: state.cancelContract?.id === contract.id,
               onAction: manageContract,
               onCancel: openCancelConfirmation,
+              onCancelBack: closeCancelConfirmation,
+              onCancelConfirm: confirmCancellation,
             }),
           );
         }
       }
 
       page.appendChild(content);
-      page.appendChild(renderCancelModal(documentRef));
     } catch (error) {
       renderPageError(page, documentRef, error);
     }
@@ -221,57 +223,23 @@ export function bootstrapExtension(
     } finally {
       state.pendingId = null;
       renderPage();
-      if (action === "cancel") {
-        documentRef.getElementById("cancel-subscription")?.hideOverlay?.();
-      }
     }
   }
 
   function openCancelConfirmation(contract) {
     state.cancelContract = contract;
+    renderPage();
   }
 
-  function renderCancelModal(documentForModal) {
-    const modal = createElement(documentForModal, "s-modal", {
-      id: "cancel-subscription",
-      heading: "Cancelar assinatura",
-    });
-    modal.appendChild(
-      textElement(
-        documentForModal,
-        "s-paragraph",
-        "Tem certeza que deseja cancelar esta assinatura? Esta ação interromperá as próximas cobranças.",
-      ),
-    );
+  function closeCancelConfirmation() {
+    state.cancelContract = null;
+    renderPage();
+  }
 
-    const backButton = textElement(documentForModal, "s-button", "Voltar", {
-      slot: "secondary-actions",
-      commandFor: modal.id,
-      command: "--hide",
-    });
-    backButton.addEventListener("click", () => {
-      state.cancelContract = null;
-    });
-    modal.appendChild(backButton);
-
-    const confirmButton = textElement(
-      documentForModal,
-      "s-button",
-      "Confirmar cancelamento",
-      { slot: "primary-action", variant: "primary", tone: "critical" },
-    );
-    setBusy(
-      confirmButton,
-      Boolean(state.pendingId),
-      Boolean(state.pendingId),
-    );
-    confirmButton.addEventListener("click", () => {
-      if (state.cancelContract && !state.pendingId) {
-        void manageContract("cancel", state.cancelContract);
-      }
-    });
-    modal.appendChild(confirmButton);
-    return modal;
+  function confirmCancellation() {
+    if (state.cancelContract && !state.pendingId) {
+      void manageContract("cancel", state.cancelContract);
+    }
   }
 
   renderPage();
@@ -351,7 +319,11 @@ function renderLoadError(documentRef, retry) {
   return stack;
 }
 
-function renderContract(documentRef, contract, { busy, onAction, onCancel }) {
+function renderContract(
+  documentRef,
+  contract,
+  { busy, confirming, onAction, onCancel, onCancelBack, onCancelConfirm },
+) {
   const section = createElement(documentRef, "s-section");
   const stack = createElement(documentRef, "s-stack", {
     direction: "block",
@@ -436,6 +408,41 @@ function renderContract(documentRef, contract, { busy, onAction, onCancel }) {
 
   const actions = contractActions(contract.status);
   if (actions.length > 0) {
+    if (confirming) {
+      stack.appendChild(
+        textElement(
+          documentRef,
+          "s-banner",
+          "Tem certeza que deseja cancelar esta assinatura? Esta ação interromperá as próximas cobranças.",
+          { tone: "critical" },
+        ),
+      );
+      const confirmationActions = createElement(documentRef, "s-button-group");
+      const backButton = textElement(documentRef, "s-button", "Voltar", {
+        slot: "secondary-actions",
+        variant: "secondary",
+      });
+      backButton.addEventListener("click", () => {
+        if (!busy) onCancelBack();
+      });
+      confirmationActions.appendChild(backButton);
+
+      const confirmButton = textElement(
+        documentRef,
+        "s-button",
+        "Confirmar cancelamento",
+        { slot: "primary-action", variant: "primary", tone: "critical" },
+      );
+      setBusy(confirmButton, busy, busy);
+      confirmButton.addEventListener("click", () => {
+        if (!busy) onCancelConfirm();
+      });
+      confirmationActions.appendChild(confirmButton);
+      stack.appendChild(confirmationActions);
+      section.appendChild(stack);
+      return section;
+    }
+
     const buttonGroup = createElement(documentRef, "s-button-group");
     const primaryAction = actions.includes("pause") ? "pause" : "activate";
     const primaryButton = textElement(
@@ -458,8 +465,6 @@ function renderContract(documentRef, contract, { busy, onAction, onCancel }) {
         slot: "secondary-actions",
         variant: "secondary",
         tone: "critical",
-        command: "--show",
-        commandFor: "cancel-subscription",
       },
     );
     setBusy(cancelButton, busy, false);
