@@ -19,7 +19,7 @@
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
     "typecheck": "react-router typegen && tsc --noEmit",
-    "test": "tsx --test app/lib/*.server.test.ts"
+    "test": "node --require ./scripts/windows-node-user-shim.cjs --import tsx --test app/lib/*.server.test.ts extensions/minha-assinatura/src/*.test.js"
   },
   "type": "module",
   "engines": {
