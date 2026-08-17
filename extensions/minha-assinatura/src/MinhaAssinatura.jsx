@@ -1,7 +1,3 @@
-/* eslint-disable react/prop-types */
-import "@shopify/ui-extensions/preact";
-import {Component, render} from "preact";
-import {useCallback, useEffect, useRef, useState} from "preact/hooks";
 import {
   createLatestRequestCoordinator,
   customerAccountRequest as requestCustomerAccount,
@@ -9,13 +5,12 @@ import {
 import {
   contractActions,
   mutationErrorFeedback,
-  resolvePageState,
 } from "./subscription-page-state.js";
 
 const API_VERSION = "2026-07";
 const API_URL = `shopify://customer-account/api/${API_VERSION}/graphql.json`;
 
-const SUBSCRIPTIONS_QUERY = `#graphql
+export const SUBSCRIPTIONS_QUERY = `#graphql
   query MinhaAssinatura {
     customer {
       subscriptionContracts(first: 50) {
@@ -24,24 +19,15 @@ const SUBSCRIPTIONS_QUERY = `#graphql
           status
           currencyCode
           nextBillingDate
-          billingPolicy {
-            interval
-            intervalCount { count }
-          }
-          deliveryPolicy {
-            interval
-            intervalCount { count }
-          }
+          billingPolicy { interval intervalCount { count } }
+          deliveryPolicy { interval intervalCount { count } }
           lines(first: 50) {
             nodes {
               id
               title
               variantTitle
               quantity
-              currentPrice {
-                amount
-                currencyCode
-              }
+              currentPrice { amount currencyCode }
             }
           }
         }
@@ -50,7 +36,7 @@ const SUBSCRIPTIONS_QUERY = `#graphql
   }
 `;
 
-const MUTATIONS = {
+export const MUTATIONS = {
   pause: `#graphql
     mutation PausarAssinatura($subscriptionContractId: ID!) {
       subscriptionContractPause(subscriptionContractId: $subscriptionContractId) {
@@ -88,8 +74,6 @@ const STATUS_LABELS = {
   STALE: "Desatualizada",
 };
 
-// Em Customer Account UI Extensions 2026-07, s-badge aceita
-// auto, neutral e critical.
 const STATUS_TONES = {
   ACTIVE: "neutral",
   PAUSED: "neutral",
@@ -101,315 +85,410 @@ const STATUS_TONES = {
   STALE: "neutral",
 };
 
-export default async () => bootstrapExtension(document.body);
-
-export function bootstrapExtension(root) {
+export default async () => {
   try {
-    render(
-      <ExtensionErrorBoundary>
-        <MinhaAssinatura />
-      </ExtensionErrorBoundary>,
-      root,
-    );
+    bootstrapExtension(document.body);
   } catch (error) {
-    renderInitializationError(root, error);
+    renderInitializationError(document.body, error);
   }
-}
+};
 
-function renderInitializationError(root, error) {
-  console.error("Minha Assinatura initialization error", error);
+export function bootstrapExtension(
+  root,
+  {
+    documentRef = document,
+    request = (query, variables) =>
+      requestCustomerAccount(API_URL, query, variables),
+  } = {},
+) {
+  const page = createElement(documentRef, "s-page", {
+    heading: "Minha Assinatura",
+    subheading:
+      "Gerencie seus planos, próximas cobranças e preferências de assinatura.",
+  });
   root.textContent = "";
-  const page = document.createElement("s-page");
-  page.setAttribute("heading", "Minha Assinatura");
-  const banner = document.createElement("s-banner");
-  banner.setAttribute("tone", "critical");
-  banner.textContent =
-    "Não foi possível iniciar esta página. Tente recarregar.";
-  page.appendChild(banner);
   root.appendChild(page);
-}
 
-class ExtensionErrorBoundary extends Component {
-  constructor(props) {
-    super(props);
-    this.state = {error: null};
-  }
+  const state = {
+    contracts: null,
+    loadError: null,
+    feedback: null,
+    pendingId: null,
+    cancelContract: null,
+  };
+  const loadCoordinator = createLatestRequestCoordinator();
 
-  componentDidCatch(error) {
-    console.error("Minha Assinatura render error", error);
-    this.setState({error});
-  }
-
-  render() {
-    if (this.state.error) {
-      return (
-        <s-page heading="Minha Assinatura">
-          <s-banner tone="critical">
-            Não foi possível exibir suas assinaturas agora. Tente recarregar a página.
-          </s-banner>
-        </s-page>
-      );
-    }
-
-    return this.props.children;
-  }
-}
-
-async function customerAccountRequest(query, variables = {}) {
-  return requestCustomerAccount(API_URL, query, variables);
-}
-
-function MinhaAssinatura() {
-  const [contracts, setContracts] = useState(null);
-  const [loadError, setLoadError] = useState(false);
-  const [pendingId, setPendingId] = useState(null);
-  const [feedback, setFeedback] = useState(null);
-  const [cancelContract, setCancelContract] = useState(null);
-  const loadCoordinator = useRef(null);
-  if (!loadCoordinator.current) {
-    loadCoordinator.current = createLatestRequestCoordinator();
-  }
-  const pageState = resolvePageState(contracts, loadError);
-
-  const loadContracts = useCallback(() => {
-    return loadCoordinator.current.run({
-      request: () => customerAccountRequest(SUBSCRIPTIONS_QUERY),
-      onLoading: () => {
-        setLoadError(false);
-        setContracts(null);
-      },
-      onSuccess: (data) => {
-        setContracts(data?.customer?.subscriptionContracts?.nodes ?? []);
-      },
-      onError: (error) => {
-        console.error("Minha Assinatura API error", error);
-        setLoadError(true);
-        setContracts([]);
-      },
-    });
-  }, []);
-
-  useEffect(() => {
-    void loadContracts();
-    return () => loadCoordinator.current.invalidate();
-  }, [loadContracts]);
-
-  async function manageContract(action, contract) {
-    if (!contract?.id) return;
-
-    setPendingId(contract.id);
-    setFeedback(null);
-
+  function renderPage() {
     try {
-      const data = await customerAccountRequest(MUTATIONS[action], {
-        subscriptionContractId: contract.id,
+      page.textContent = "";
+      const content = createElement(documentRef, "s-stack", {
+        direction: "block",
+        gap: "base",
       });
 
-      const payload = data?.[`subscriptionContract${capitalize(action)}`];
-
-      if (!payload) {
-        throw new Error("A Shopify não retornou o resultado da operação.");
-      }
-
-      if (payload.userErrors?.length) {
-        throw new Error(
-          payload.userErrors.map(({message}) => message).join(" "),
+      if (state.feedback) {
+        content.appendChild(
+          textElement(documentRef, "s-banner", state.feedback.message, {
+            tone: state.feedback.tone,
+          }),
         );
       }
 
-      setContracts((current) =>
-        (current ?? []).map((item) =>
-          item.id === contract.id
-            ? {...item, status: payload.contract?.status ?? item.status}
-            : item,
-        ),
-      );
-
-      if (action === "cancel") {
-        document.getElementById("cancel-subscription")?.hideOverlay();
+      if (state.contracts === null && !state.loadError) {
+        content.appendChild(renderLoading(documentRef));
+      } else if (state.loadError) {
+        content.appendChild(renderLoadError(documentRef, loadContracts));
+      } else if (state.contracts.length === 0) {
+        const section = createElement(documentRef, "s-section");
+        section.appendChild(
+          textElement(
+            documentRef,
+            "s-text",
+            "Você ainda não possui assinaturas.",
+          ),
+        );
+        content.appendChild(section);
+      } else {
+        for (const contract of state.contracts) {
+          content.appendChild(
+            renderContract(documentRef, contract, {
+              busy: state.pendingId === contract.id,
+              onAction: manageContract,
+              onCancel: openCancelConfirmation,
+            }),
+          );
+        }
       }
 
-      setCancelContract(null);
-      setFeedback({
-        tone: "success",
-        message: successMessage(action),
-      });
+      page.appendChild(content);
+      page.appendChild(renderCancelModal(documentRef));
     } catch (error) {
-      console.error("Minha Assinatura mutation error", error);
-      setFeedback(mutationErrorFeedback(error));
-    } finally {
-      setPendingId(null);
+      renderPageError(page, documentRef, error);
     }
   }
 
-  return (
-    <s-page
-      heading="Minha Assinatura"
-      subheading="Gerencie seus planos, próximas cobranças e preferências de assinatura."
-    >
-      <s-stack direction="block" gap="base">
-        {feedback && (
-          <s-banner tone={feedback.tone}>{feedback.message}</s-banner>
-        )}
+  function loadContracts() {
+    return loadCoordinator.run({
+      request: () => request(SUBSCRIPTIONS_QUERY, {}),
+      onLoading: () => {
+        state.contracts = null;
+        state.loadError = null;
+        renderPage();
+      },
+      onSuccess: (data) => {
+        state.contracts = data?.customer?.subscriptionContracts?.nodes ?? [];
+        renderPage();
+      },
+      onError: (error) => {
+        console.error("Minha Assinatura API error", error);
+        state.contracts = [];
+        state.loadError = error;
+        renderPage();
+      },
+    });
+  }
 
-        {pageState === "loading" && (
-          <s-stack direction="inline" gap="base" alignItems="center">
-            <s-spinner accessibilityLabel="Carregando assinaturas" />
-            <s-text>Carregando suas assinaturas...</s-text>
-          </s-stack>
-        )}
+  async function manageContract(action, contract) {
+    if (!contract?.id || !MUTATIONS[action]) return;
+    state.pendingId = contract.id;
+    state.feedback = null;
+    renderPage();
 
-        {pageState === "error" && (
-          <s-stack direction="block" gap="small">
-            <s-banner tone="critical">
-              Não foi possível carregar suas assinaturas. Tente novamente.
-            </s-banner>
-            <s-button onClick={() => void loadContracts()}>
-              Tentar novamente
-            </s-button>
-          </s-stack>
-        )}
+    try {
+      const data = await request(MUTATIONS[action], {
+        subscriptionContractId: contract.id,
+      });
+      const payload = data?.[`subscriptionContract${capitalize(action)}`];
+      if (!payload) {
+        throw new Error("A Shopify não retornou o resultado da operação.");
+      }
+      if (payload.userErrors?.length) {
+        throw new Error(
+          payload.userErrors.map(({ message }) => message).join(" "),
+        );
+      }
 
-        {pageState === "empty" && (
-          <s-section>
-            <s-text>Você ainda não possui assinaturas.</s-text>
-          </s-section>
-        )}
+      state.contracts = state.contracts.map((item) =>
+        item.id === contract.id
+          ? { ...item, status: payload.contract?.status ?? item.status }
+          : item,
+      );
+      state.cancelContract = null;
+      state.feedback = { tone: "success", message: successMessage(action) };
+    } catch (error) {
+      console.error("Minha Assinatura mutation error", error);
+      state.feedback = mutationErrorFeedback(error);
+    } finally {
+      state.pendingId = null;
+      renderPage();
+      if (action === "cancel") {
+        documentRef.getElementById("cancel-subscription")?.hideOverlay?.();
+      }
+    }
+  }
 
-        {contracts?.map((contract) => (
-          <ContractCard
-            key={contract.id}
-            contract={contract}
-            busy={pendingId === contract.id}
-            onPause={() => manageContract("pause", contract)}
-            onActivate={() => manageContract("activate", contract)}
-            onCancel={() => setCancelContract(contract)}
-          />
-        ))}
-      </s-stack>
+  function openCancelConfirmation(contract) {
+    state.cancelContract = contract;
+    renderPage();
+    documentRef.getElementById("cancel-subscription")?.showOverlay?.();
+  }
 
-      <s-modal id="cancel-subscription" heading="Cancelar assinatura">
-        <s-paragraph>
-          Tem certeza que deseja cancelar esta assinatura? Esta ação interromperá
-          as próximas cobranças.
-        </s-paragraph>
+  function renderCancelModal(documentForModal) {
+    const modal = createElement(documentForModal, "s-modal", {
+      id: "cancel-subscription",
+      heading: "Cancelar assinatura",
+    });
+    modal.appendChild(
+      textElement(
+        documentForModal,
+        "s-paragraph",
+        "Tem certeza que deseja cancelar esta assinatura? Esta ação interromperá as próximas cobranças.",
+      ),
+    );
 
-        <s-button
-          slot="secondary-actions"
-          commandFor="cancel-subscription"
-          command="--hide"
-          onClick={() => setCancelContract(null)}
-        >
-          Voltar
-        </s-button>
+    const backButton = textElement(documentForModal, "s-button", "Voltar", {
+      slot: "secondary-actions",
+      commandFor: modal.id,
+      command: "--hide",
+    });
+    backButton.addEventListener("click", () => {
+      state.cancelContract = null;
+    });
+    modal.appendChild(backButton);
 
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          tone="critical"
-          disabled={!cancelContract || pendingId === cancelContract?.id}
-          loading={pendingId === cancelContract?.id}
-          onClick={() => manageContract("cancel", cancelContract)}
-        >
-          Confirmar cancelamento
-        </s-button>
-      </s-modal>
-    </s-page>
+    const confirmButton = textElement(
+      documentForModal,
+      "s-button",
+      "Confirmar cancelamento",
+      { slot: "primary-action", variant: "primary", tone: "critical" },
+    );
+    setBusy(
+      confirmButton,
+      Boolean(
+        !state.cancelContract || state.pendingId === state.cancelContract?.id,
+      ),
+      Boolean(state.pendingId === state.cancelContract?.id),
+    );
+    confirmButton.addEventListener("click", () => {
+      if (state.cancelContract) {
+        void manageContract("cancel", state.cancelContract);
+      }
+    });
+    modal.appendChild(confirmButton);
+    return modal;
+  }
+
+  renderPage();
+  const ready = loadContracts();
+  return {
+    loadContracts,
+    manageContract,
+    openCancelConfirmation,
+    ready,
+    state,
+  };
+}
+
+export function renderInitializationError(root, error, documentRef = document) {
+  console.error("Minha Assinatura initialization error", error);
+  root.textContent = "";
+  const page = createElement(documentRef, "s-page", {
+    heading: "Minha Assinatura",
+  });
+  page.appendChild(
+    textElement(
+      documentRef,
+      "s-banner",
+      "Não foi possível iniciar esta página. Tente recarregar.",
+      { tone: "critical" },
+    ),
+  );
+  root.appendChild(page);
+}
+
+function renderPageError(page, documentRef, error) {
+  console.error("Minha Assinatura render error", error);
+  page.textContent = "";
+  page.appendChild(
+    textElement(
+      documentRef,
+      "s-banner",
+      "Não foi possível exibir suas assinaturas agora. Tente recarregar a página.",
+      { tone: "critical" },
+    ),
   );
 }
 
-function ContractCard({contract, busy, onPause, onActivate, onCancel}) {
+function renderLoading(documentRef) {
+  const stack = createElement(documentRef, "s-stack", {
+    direction: "inline",
+    gap: "base",
+    alignItems: "center",
+  });
+  stack.appendChild(
+    createElement(documentRef, "s-spinner", {
+      accessibilityLabel: "Carregando assinaturas",
+    }),
+  );
+  stack.appendChild(
+    textElement(documentRef, "s-text", "Carregando suas assinaturas..."),
+  );
+  return stack;
+}
+
+function renderLoadError(documentRef, retry) {
+  const stack = createElement(documentRef, "s-stack", {
+    direction: "block",
+    gap: "small",
+  });
+  stack.appendChild(
+    textElement(
+      documentRef,
+      "s-banner",
+      "Não foi possível carregar suas assinaturas. Tente novamente.",
+      { tone: "critical" },
+    ),
+  );
+  const retryButton = textElement(documentRef, "s-button", "Tentar novamente");
+  retryButton.addEventListener("click", () => void retry());
+  stack.appendChild(retryButton);
+  return stack;
+}
+
+function renderContract(documentRef, contract, { busy, onAction, onCancel }) {
+  const section = createElement(documentRef, "s-section");
+  const stack = createElement(documentRef, "s-stack", {
+    direction: "block",
+    gap: "base",
+  });
   const lines = contract?.lines?.nodes ?? [];
-  const actions = contractActions(contract.status);
+  stack.appendChild(
+    textElement(
+      documentRef,
+      "s-badge",
+      STATUS_LABELS[contract.status] ?? contract.status,
+      { tone: STATUS_TONES[contract.status] ?? "neutral" },
+    ),
+  );
+
+  for (const line of lines) {
+    const lineStack = createElement(documentRef, "s-stack", {
+      direction: "block",
+      gap: "small",
+    });
+    lineStack.appendChild(
+      textElement(
+        documentRef,
+        "s-heading",
+        `${line.title}${line.variantTitle ? ` — ${line.variantTitle}` : ""}`,
+      ),
+    );
+    lineStack.appendChild(
+      textElement(documentRef, "s-text", `Quantidade: ${line.quantity}`),
+    );
+    if (line.currentPrice) {
+      lineStack.appendChild(
+        textElement(
+          documentRef,
+          "s-text",
+          formatMoney(line.currentPrice.amount, line.currentPrice.currencyCode),
+        ),
+      );
+    }
+    stack.appendChild(lineStack);
+  }
 
   const total = lines.reduce(
     (sum, line) =>
       sum +
-      Number(line?.currentPrice?.amount ?? 0) *
-        Number(line?.quantity ?? 0),
+      Number(line?.currentPrice?.amount ?? 0) * Number(line?.quantity ?? 0),
     0,
   );
-
-  return (
-    <s-section>
-      <s-stack direction="block" gap="base">
-        <s-badge tone={STATUS_TONES[contract.status] ?? "neutral"}>
-          {STATUS_LABELS[contract.status] ?? contract.status}
-        </s-badge>
-
-        {lines.map((line) => (
-          <s-stack key={line.id} direction="block" gap="small">
-            <s-heading>
-              {line.title}
-              {line.variantTitle ? ` — ${line.variantTitle}` : ""}
-            </s-heading>
-
-            <s-text>Quantidade: {line.quantity}</s-text>
-
-            {line.currentPrice && (
-              <s-text>
-                {formatMoney(
-                  line.currentPrice.amount,
-                  line.currentPrice.currencyCode,
-                )}
-              </s-text>
-            )}
-          </s-stack>
-        ))}
-
-        <s-text type="strong">
-          Total: {formatMoney(total, contract.currencyCode)}
-        </s-text>
-
-        <s-text>
-          {formatFrequency("Cobrança", contract.billingPolicy)}
-        </s-text>
-
-        <s-text>
-          {formatFrequency("Entrega", contract.deliveryPolicy)}
-        </s-text>
-
-        <s-text>
-          Próxima cobrança:{" "}
-          {contract.nextBillingDate
-            ? formatDate(contract.nextBillingDate)
-            : "Não disponível"}
-        </s-text>
-
-        {actions.length > 0 && (
-          <s-button-group>
-            {actions.includes("pause") ? (
-              <s-button
-                disabled={busy}
-                loading={busy}
-                onClick={onPause}
-              >
-                Pausar assinatura
-              </s-button>
-            ) : (
-              <s-button
-                disabled={busy}
-                loading={busy}
-                onClick={onActivate}
-              >
-                Retomar assinatura
-              </s-button>
-            )}
-
-            <s-button
-              tone="critical"
-              disabled={busy}
-              commandFor="cancel-subscription"
-              command="--show"
-              onClick={onCancel}
-            >
-              Cancelar assinatura
-            </s-button>
-          </s-button-group>
-        )}
-      </s-stack>
-    </s-section>
+  stack.appendChild(
+    textElement(
+      documentRef,
+      "s-text",
+      `Total: ${formatMoney(total, contract.currencyCode)}`,
+      { type: "strong" },
+    ),
   );
+  stack.appendChild(
+    textElement(
+      documentRef,
+      "s-text",
+      formatFrequency("Cobrança", contract.billingPolicy),
+    ),
+  );
+  stack.appendChild(
+    textElement(
+      documentRef,
+      "s-text",
+      formatFrequency("Entrega", contract.deliveryPolicy),
+    ),
+  );
+  stack.appendChild(
+    textElement(
+      documentRef,
+      "s-text",
+      `Próxima cobrança: ${
+        contract.nextBillingDate
+          ? formatDate(contract.nextBillingDate)
+          : "Não disponível"
+      }`,
+    ),
+  );
+
+  const actions = contractActions(contract.status);
+  if (actions.length > 0) {
+    const buttonGroup = createElement(documentRef, "s-button-group");
+    const primaryAction = actions.includes("pause") ? "pause" : "activate";
+    const primaryButton = textElement(
+      documentRef,
+      "s-button",
+      primaryAction === "pause" ? "Pausar assinatura" : "Retomar assinatura",
+    );
+    setBusy(primaryButton, busy, busy);
+    primaryButton.addEventListener("click", () => {
+      if (!busy) void onAction(primaryAction, contract);
+    });
+    buttonGroup.appendChild(primaryButton);
+
+    const cancelButton = textElement(
+      documentRef,
+      "s-button",
+      "Cancelar assinatura",
+      { tone: "critical" },
+    );
+    setBusy(cancelButton, busy, false);
+    cancelButton.addEventListener("click", () => {
+      if (!busy) onCancel(contract);
+    });
+    buttonGroup.appendChild(cancelButton);
+    stack.appendChild(buttonGroup);
+  }
+  section.appendChild(stack);
+  return section;
+}
+
+function createElement(documentRef, tagName, attributes = {}) {
+  const element = documentRef.createElement(tagName);
+  for (const [name, value] of Object.entries(attributes)) {
+    if (value !== undefined && value !== null) {
+      element.setAttribute(name, String(value));
+    }
+  }
+  return element;
+}
+
+function textElement(documentRef, tagName, text, attributes) {
+  const element = createElement(documentRef, tagName, attributes);
+  element.textContent = text;
+  return element;
+}
+
+function setBusy(button, disabled, loading) {
+  if (disabled) button.setAttribute("disabled", "");
+  if (loading) button.setAttribute("loading", "");
 }
 
 function capitalize(value) {
@@ -437,28 +516,23 @@ function formatMoney(amount, currencyCode) {
 
 function formatDate(value) {
   try {
-    return new Intl.DateTimeFormat("pt-BR", {
-      timeZone: "UTC",
-    }).format(new Date(value));
+    return new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(
+      new Date(value),
+    );
   } catch {
     return value;
   }
 }
 
 function formatFrequency(label, policy) {
-  if (!policy?.interval) {
-    return `${label}: não disponível`;
-  }
-
+  if (!policy?.interval) return `${label}: não disponível`;
   const count = Number(policy?.intervalCount?.count ?? 1);
-
   const units = {
     DAY: count === 1 ? "dia" : "dias",
     WEEK: count === 1 ? "semana" : "semanas",
     MONTH: count === 1 ? "mês" : "meses",
     YEAR: count === 1 ? "ano" : "anos",
   };
-
   return `${label} a cada ${count} ${
     units[policy.interval] ?? String(policy.interval).toLowerCase()
   }`;
