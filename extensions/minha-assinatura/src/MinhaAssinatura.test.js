@@ -226,14 +226,20 @@ for (const [action, initialStatus, resultingStatus, mutationName] of [
       },
     });
     await controller.ready;
-    const mutationPromise = controller.manageContract(action, currentContract);
+    const actionButton = findByText(
+      documentRef.body,
+      action === "pause" ? "Pausar assinatura" : "Retomar assinatura",
+    );
+    assert.equal(actionButton.getAttribute("slot"), "primary-action");
+    assert.equal(actionButton.getAttribute("variant"), "primary");
+    actionButton.click();
 
     assert.ok(
       walk(documentRef.body).some(
         (element) => element.getAttribute("loading") === "",
       ),
     );
-    await mutationPromise;
+    await flushPromises();
     assert.match(calls[1].query, new RegExp(`mutation ${mutationName}`));
     assert.deepEqual(calls[1].variables, {
       subscriptionContractId: currentContract.id,
@@ -261,7 +267,11 @@ test("cancel requires confirmation and sends the preserved mutation", async () =
   });
   await controller.ready;
 
-  controller.openCancelConfirmation(currentContract);
+  const cancelButton = findByText(documentRef.body, "Cancelar assinatura");
+  assert.equal(cancelButton.getAttribute("slot"), "secondary-actions");
+  assert.equal(cancelButton.getAttribute("variant"), "secondary");
+  assert.equal(cancelButton.getAttribute("tone"), "critical");
+  cancelButton.click();
   const modal = documentRef.getElementById("cancel-subscription");
   assert.equal(modal.overlayShown, true);
   findByText(modal, "Confirmar cancelamento").click();

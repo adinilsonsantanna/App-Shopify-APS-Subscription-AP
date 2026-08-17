@@ -446,6 +446,7 @@ function renderContract(documentRef, contract, { busy, onAction, onCancel }) {
       documentRef,
       "s-button",
       primaryAction === "pause" ? "Pausar assinatura" : "Retomar assinatura",
+      { slot: "primary-action", variant: "primary" },
     );
     setBusy(primaryButton, busy, busy);
     primaryButton.addEventListener("click", () => {
@@ -457,7 +458,11 @@ function renderContract(documentRef, contract, { busy, onAction, onCancel }) {
       documentRef,
       "s-button",
       "Cancelar assinatura",
-      { tone: "critical" },
+      {
+        slot: "secondary-actions",
+        variant: "secondary",
+        tone: "critical",
+      },
     );
     setBusy(cancelButton, busy, false);
     cancelButton.addEventListener("click", () => {
