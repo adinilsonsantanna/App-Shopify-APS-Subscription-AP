@@ -9,7 +9,7 @@ import prisma from "../db.server";
 const ACTIONS = new Set(["PAUSE_AND_NOTIFY", "CANCEL_AND_NOTIFY", "SKIP_AND_NOTIFY"]);
 const FREQUENCIES = new Set(["IMMEDIATELY", "DAILY_SUMMARY", "WEEKLY_SUMMARY", "NEVER"]);
 function boundedInteger(formData: FormData, name: string, min: number, max: number) { const value = Number(formData.get(name)); return Number.isInteger(value) && value >= min && value <= max ? value : null; }
-export const loader = async ({ request }: LoaderFunctionArgs) => { const { session } = await authenticate.admin(request); const settings = await loadRetrySettingsWithMigration(session.shop, prisma.billingRetrySettings); const shopHandle = session.shop.replace(/\.myshopify\.com$/i, ""); return { settings, notificationsUrl: `https://admin.shopify.com/store/${shopHandle}/settings/notifications/customer` }; };
+export const loader = async ({ request }: LoaderFunctionArgs) => { const { session } = await authenticate.admin(request); const settings = await loadRetrySettingsWithMigration(session.shop, prisma.billingRetrySettings); return { settings, notificationsUrl: "/app/notifications" }; };
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request); const formData = await request.formData();
   const paymentRetryAttempts = boundedInteger(formData, "paymentRetryAttempts", 0, 10), paymentRetryDays = boundedInteger(formData, "paymentRetryDays", 1, 14), inventoryRetryAttempts = boundedInteger(formData, "inventoryRetryAttempts", 0, 10), inventoryRetryDays = boundedInteger(formData, "inventoryRetryDays", 1, 14);
