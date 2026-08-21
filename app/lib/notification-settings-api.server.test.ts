@@ -4,6 +4,7 @@ import {
   getNotificationSettings,
   saveNotificationSettings,
   domainAction,
+  getSendingDomains,
   sendNotificationTest,
 } from "./notification-settings-api.server";
 const deps = (calls: any[]) => ({
@@ -48,3 +49,4 @@ test("notification API does not expose provider payload on error", async () => {
     /sender_not_verified/,
   );
 });
+test("domain response is recursively allowlisted before it can reach the loader", async () => { const domains = await getSendingDomains("one.myshopify.com", { baseUrl: "https://central.test", apiKey: "secret", fetchFn: async () => Response.json({ success: true, data: [{ id: "d1", domain: "example.com", status: "verified", sendingVerified: true, providerDomainId: "provider-secret", encryptedApiKey: "ciphertext", apiKeyId: "key-secret", records: [{ id: "internal", purpose: "DKIM", type: "CNAME", name: "key", value: "target", status: "verified", token: "secret" }] }] }) }); const serialized = JSON.stringify(domains); for (const field of ["providerDomainId", "encryptedApiKey", "apiKeyId", "token", "internal"]) assert.equal(serialized.includes(field), false); assert.equal(domains[0].records[0].value, "target"); });

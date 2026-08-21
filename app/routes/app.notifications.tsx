@@ -35,11 +35,9 @@ const statusLabel: Record<string, string> = {
 };
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
-  const [settings, domains] = await Promise.all([
-    getNotificationSettings(session.shop),
-    getSendingDomains(session.shop).catch((): SendingDomain[] => []),
-  ]);
-  return { settings, domains };
+  const settings = await getNotificationSettings(session.shop);
+  try { return { settings, domains: await getSendingDomains(session.shop), domainsError: null }; }
+  catch (error) { return { settings, domains: [] as SendingDomain[], domainsError: error instanceof Error ? error.message : "Não foi possível carregar os domínios." }; }
 }
 export async function action({ request }: ActionFunctionArgs) {
   const { session } = await authenticate.admin(request),
@@ -98,11 +96,13 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 }
 export default function NotificationsPage() {
-  const { settings, domains } = useLoaderData<typeof loader>(),
+  const { settings, domains, domainsError } = useLoaderData<typeof loader>(),
     result = useActionData<typeof action>(),
     navigation = useNavigation(),
     shopify = useAppBridge(),
-    domain = domains[0];
+    activeDomain = domains.find((item) => item.id === settings.activeSendingDomain?.id),
+    pendingDomain = domains.find((item) => item.domain === settings.fromEmail?.split("@")[1] && item.id !== activeDomain?.id),
+    domain = pendingDomain || activeDomain || domains[0];
   useEffect(() => {
     if (result?.ok) shopify.toast.show(result.message);
   }, [result, shopify]);
@@ -122,6 +122,8 @@ export default function NotificationsPage() {
           <input type="hidden" name="intent" value="save" />
           <s-section heading="Remetente e equipe">
             <s-stack direction="block" gap="base">
+              {settings.activeFromEmail ? <s-banner heading="Remetente ativo" tone="success">{settings.activeFromName || "Remetente"} &lt;{settings.activeFromEmail}&gt;{settings.activeReplyTo ? ` · Reply-To ${settings.activeReplyTo}` : ""}</s-banner> : <s-banner heading="Nenhum remetente ativo" tone="warning">Conclua a verificação DNS antes de enviar notificações.</s-banner>}
+              {settings.fromEmail && settings.fromEmail !== settings.activeFromEmail ? <s-banner heading="Remetente aguardando verificação" tone="info">{settings.fromName || "Remetente"} &lt;{settings.fromEmail}&gt;</s-banner> : null}
               <s-text-field
                 label="Nome do remetente"
                 name="fromName"
@@ -212,6 +214,7 @@ export default function NotificationsPage() {
         </Form>
         <s-section heading="Configuração DNS">
           <s-stack direction="block" gap="base">
+            {domainsError ? <s-banner heading="Falha ao carregar domínios" tone="critical">{domainsError} Tente atualizar o status novamente.</s-banner> : null}
             <s-text>Domínio: {domain?.domain || "Não configurado"}</s-text>
             <s-badge tone={domain?.sendingVerified ? "success" : "caution"}>
               {statusLabel[domain?.status || "not_configured"] ||
@@ -229,7 +232,7 @@ export default function NotificationsPage() {
                 </s-table-header-row>
                 <s-table-body>
                   {domain.records.map((record) => (
-                    <s-table-row key={record.id}>
+                    <s-table-row key={`${record.type}:${record.name}:${record.value}`}>
                       <s-table-cell>{record.purpose}</s-table-cell>
                       <s-table-cell>{record.type}</s-table-cell>
                       <s-table-cell>{record.name}</s-table-cell>
@@ -288,7 +291,7 @@ export default function NotificationsPage() {
               </Form>
               <Form method="post">
                 <input type="hidden" name="intent" value="test" />
-                <s-button type="submit" disabled={!domain?.sendingVerified}>
+                <s-button type="submit" disabled={!activeDomain?.sendingVerified || !settings.activeFromEmail}>
                   Enviar teste para equipe
                 </s-button>
               </Form>

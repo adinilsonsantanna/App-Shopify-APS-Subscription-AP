@@ -3,6 +3,9 @@ export type NotificationSettings = {
   fromName: string | null;
   fromEmail: string | null;
   replyTo: string | null;
+  activeFromName?: string | null;
+  activeFromEmail?: string | null;
+  activeReplyTo?: string | null;
   teamEmails: string[];
   teamFrequency: string;
   customerNotificationsEnabled: boolean;
@@ -27,7 +30,6 @@ export type SendingDomain = {
   sendingVerified: boolean;
   lastCheckedAt?: string | null;
   records: Array<{
-    id: string;
     purpose: string;
     type: string;
     name: string;
@@ -69,7 +71,7 @@ export async function notificationApi(
     );
     const value = (await response.json()) as {
       success?: boolean;
-      data?: any;
+      data?: unknown;
       error?: string;
       status?: string;
     };
@@ -118,7 +120,7 @@ export function getSendingDomains(
     "GET",
     undefined,
     dependencies,
-  ) as Promise<SendingDomain[]>;
+  ).then((value) => { if (!Array.isArray(value)) throw new Error("Resposta de domínios inválida."); return value.map((item) => { const source = item && typeof item === "object" ? item as Record<string, unknown> : {}; const records = Array.isArray(source.records) ? source.records : []; return { id: String(source.id || ""), domain: String(source.domain || ""), status: String(source.status || ""), sendingVerified: source.sendingVerified === true, lastCheckedAt: typeof source.lastCheckedAt === "string" ? source.lastCheckedAt : null, records: records.map((record) => { const dns = record && typeof record === "object" ? record as Record<string, unknown> : {}; return { purpose: String(dns.purpose || ""), type: String(dns.type || ""), name: String(dns.name || ""), value: String(dns.value || ""), priority: typeof dns.priority === "number" ? dns.priority : null, ttl: dns.ttl == null ? null : String(dns.ttl), status: String(dns.status || "") }; }) }; }); }) as Promise<SendingDomain[]>;
 }
 export function domainAction(
   shop: string,
