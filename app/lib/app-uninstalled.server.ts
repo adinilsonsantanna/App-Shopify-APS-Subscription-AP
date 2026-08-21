@@ -1,4 +1,3 @@
-import db from "../db.server";
 import {
   forwardAuthenticatedShopifyWebhook,
   type AuthenticatedWebhookResult,
@@ -12,6 +11,7 @@ interface UninstallDependencies {
 const productionDependencies: UninstallDependencies = {
   forward: forwardAuthenticatedShopifyWebhook,
   deleteSessions: async (shop) => {
+    const { default: db } = await import("../db.server");
     await db.session.deleteMany({ where: { shop } });
   },
 };

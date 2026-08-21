@@ -15,6 +15,7 @@ const OPERATIONS: Record<LifecycleAction, { field: string; operation: string }> 
   resume: { field: "subscriptionContractActivate", operation: "ActivateSubscriptionContract" },
   cancel: { field: "subscriptionContractCancel", operation: "CancelSubscriptionContract" },
 };
+const TARGET_STATUS: Record<LifecycleAction, string> = { pause: "PAUSED", resume: "ACTIVE", cancel: "CANCELLED" };
 
 function secretMatches(received: string, expected?: string) {
   if (!expected) return false;
@@ -56,6 +57,14 @@ export async function handleSubscriptionLifecycle(request: Request, dependencies
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? 8_000);
   try {
+    const stateResponse = await authenticated.admin.graphql(`#graphql
+      query LifecycleContractStatus($subscriptionContractId: ID!) {
+        subscriptionContract(id: $subscriptionContractId) { id status }
+      }`, { variables: { subscriptionContractId: contractId }, signal: controller.signal });
+    const stateResult = await stateResponse.json() as { errors?: unknown[]; data?: { subscriptionContract?: { id?: string; status?: string } | null } };
+    if (!stateResponse.ok || stateResult.errors?.length) return jsonError(502, "shopify_graphql_error", "Shopify GraphQL request failed");
+    if (!stateResult.data?.subscriptionContract?.id || !stateResult.data.subscriptionContract.status) return jsonError(404, "contract_not_found", "Subscription contract not found");
+    if (stateResult.data.subscriptionContract.status === TARGET_STATUS[action]) return Response.json({ success: true, duplicate: true, requestId, action, contractId, status: TARGET_STATUS[action] });
     const response = await authenticated.admin.graphql(`#graphql
       mutation ${operation.operation}($subscriptionContractId: ID!, $actor: SubscriptionActor) {
         ${operation.field}(subscriptionContractId: $subscriptionContractId, actor: $actor) {
