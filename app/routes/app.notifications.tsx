@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import type { ActionFunctionArgs } from "react-router";
 import {
   Form,
   useActionData,
@@ -13,16 +12,15 @@ import {
   saveNotificationSettings,
   sendNotificationTest,
 } from "../lib/notification-settings-api.server";
+import { createNotificationPageAction } from "../lib/notification-page-action.server";
 import {
   createNotificationPageLoader,
   notificationPageApi,
 } from "../lib/notification-page.server";
-const FREQUENCIES = new Set([
-  "IMMEDIATELY",
-  "DAILY_SUMMARY",
-  "WEEKLY_SUMMARY",
-  "NEVER",
-]);
+import {
+  buildNotificationDnsState,
+  notificationActionProgress,
+} from "../lib/notification-dns-ui";
 const statusLabel: Record<string, string> = {
   not_configured: "Não configurado",
   not_started: "Aguardando DNS",
@@ -38,70 +36,23 @@ export const loader = createNotificationPageLoader({
   authenticateAdmin: authenticate.admin,
   ...notificationPageApi,
 });
-export async function action({ request }: ActionFunctionArgs) {
-  const { session } = await authenticate.admin(request),
-    form = await request.formData(),
-    intent = String(form.get("intent") || "save");
-  try {
-    if (["setup", "verify", "refresh"].includes(intent)) {
-      await domainAction(
-        session.shop,
-        intent as "setup" | "verify" | "refresh",
-      );
-      return {
-        ok: true,
-        message:
-          intent === "setup"
-            ? "Configuração DNS criada."
-            : "Status do domínio atualizado.",
-      };
-    }
-    if (intent === "test") {
-      await sendNotificationTest(session.shop);
-      return {
-        ok: true,
-        message: "E-mail de teste solicitado para a equipe configurada.",
-      };
-    }
-    const teamFrequency = String(form.get("teamFrequency") || "");
-    if (!FREQUENCIES.has(teamFrequency))
-      return { ok: false, message: "Frequência inválida." };
-    const teamEmails = String(form.get("teamEmails") || "")
-      .split(/[\s,;]+/)
-      .filter(Boolean);
-    await saveNotificationSettings(session.shop, {
-      fromName: form.get("fromName"),
-      fromEmail: form.get("fromEmail"),
-      replyTo: form.get("replyTo"),
-      teamEmails,
-      teamFrequency,
-      customerNotificationsEnabled:
-        form.get("customerNotificationsEnabled") === "on",
-      paymentFailedEnabled: form.get("paymentFailedEnabled") === "on",
-      retryScheduledEnabled: form.get("retryScheduledEnabled") === "on",
-      inventoryFailedEnabled: form.get("inventoryFailedEnabled") === "on",
-      inventoryRetryEnabled: form.get("inventoryRetryEnabled") === "on",
-      pausedEnabled: form.get("pausedEnabled") === "on",
-      cancelledEnabled: form.get("cancelledEnabled") === "on",
-      renewalSucceededEnabled: form.get("renewalSucceededEnabled") === "on",
-    });
-    return { ok: true, message: "Configurações de notificações salvas." };
-  } catch {
-    return {
-      ok: false,
-      message:
-        "A operação não foi confirmada pela API Central. Tente novamente.",
-    };
-  }
-}
+export const action = createNotificationPageAction({
+  authenticateAdmin: authenticate.admin,
+  domainAction,
+  saveSettings: saveNotificationSettings,
+  sendTest: sendNotificationTest,
+});
 export default function NotificationsPage() {
   const { settings, domains, loadError, domainsError } = useLoaderData<typeof loader>(),
     result = useActionData<typeof action>(),
     navigation = useNavigation(),
     shopify = useAppBridge(),
-    activeDomain = domains.find((item) => item.id === settings?.activeSendingDomain?.id),
-    pendingDomain = domains.find((item) => item.domain === settings?.fromEmail?.split("@")[1] && item.id !== activeDomain?.id),
-    domain = pendingDomain || activeDomain || domains[0];
+    dns = buildNotificationDnsState(settings, domains),
+    progress = notificationActionProgress(
+      navigation.state,
+      navigation.formData,
+    ),
+    { domain, activeDomain } = dns;
   useEffect(() => {
     if (result?.ok) shopify.toast.show(result.message);
   }, [result, shopify]);
@@ -123,7 +74,7 @@ export default function NotificationsPage() {
           <s-section heading="Remetente e equipe">
             <s-stack direction="block" gap="base">
               {settings.activeFromEmail ? <s-banner heading="Remetente ativo" tone="success">{settings.activeFromName || "Remetente"} &lt;{settings.activeFromEmail}&gt;{settings.activeReplyTo ? ` · Reply-To ${settings.activeReplyTo}` : ""}</s-banner> : <s-banner heading="Nenhum remetente ativo" tone="warning">Conclua a verificação DNS antes de enviar notificações.</s-banner>}
-              {settings.fromEmail && settings.fromEmail !== settings.activeFromEmail ? <s-banner heading="Remetente aguardando verificação" tone="info">{settings.fromName || "Remetente"} &lt;{settings.fromEmail}&gt;</s-banner> : null}
+              {dns.showPendingSender ? <s-banner heading="Remetente aguardando verificação" tone="info">{settings.fromName || "Remetente"} &lt;{settings.fromEmail}&gt;</s-banner> : null}
               <s-text-field
                 label="Nome do remetente"
                 name="fromName"
@@ -215,6 +166,7 @@ export default function NotificationsPage() {
         <s-section heading="Configuração DNS">
           <s-stack direction="block" gap="base">
             {domainsError ? <s-banner heading="Falha ao carregar domínios" tone="critical">{domainsError} Tente atualizar o status novamente.</s-banner> : null}
+            {dns.recoverableError ? <s-banner heading="A verificação DNS encontrou um problema" tone="critical">Os registros continuam disponíveis. Verifique o DNS e tente verificar ou atualizar o status novamente.</s-banner> : null}
             <s-text>Domínio: {domain?.domain || "Não configurado"}</s-text>
             <s-badge tone={domain?.sendingVerified ? "success" : "caution"}>
               {statusLabel[domain?.status || "not_configured"] ||
@@ -227,6 +179,8 @@ export default function NotificationsPage() {
                   <s-table-header>Tipo</s-table-header>
                   <s-table-header>Nome/host</s-table-header>
                   <s-table-header>Valor/destino</s-table-header>
+                  <s-table-header>Prioridade</s-table-header>
+                  <s-table-header>TTL</s-table-header>
                   <s-table-header>Status</s-table-header>
                   <s-table-header>Ações</s-table-header>
                 </s-table-header-row>
@@ -236,13 +190,9 @@ export default function NotificationsPage() {
                       <s-table-cell>{record.purpose}</s-table-cell>
                       <s-table-cell>{record.type}</s-table-cell>
                       <s-table-cell>{record.name}</s-table-cell>
-                      <s-table-cell>
-                        {record.value}
-                        {record.priority != null
-                          ? ` · prioridade ${record.priority}`
-                          : ""}
-                        {record.ttl ? ` · TTL ${record.ttl}` : ""}
-                      </s-table-cell>
+                      <s-table-cell>{record.value}</s-table-cell>
+                      <s-table-cell>{record.priority ?? "—"}</s-table-cell>
+                      <s-table-cell>{record.ttl || "—"}</s-table-cell>
                       <s-table-cell>{record.status}</s-table-cell>
                       <s-table-cell>
                         <s-button-group gap="base">
@@ -264,38 +214,39 @@ export default function NotificationsPage() {
                   ))}
                 </s-table-body>
               </s-table>
-            ) : (
+            ) : dns.state === "NOT_CONFIGURED" ? (
               <s-paragraph>
-                Salve o remetente e inicie a configuração para obter os
-                registros exatos do Resend.
+                {settings?.fromEmail
+                  ? "Inicie a configuração DNS para criar o domínio e obter os registros."
+                  : "Salve o remetente antes de iniciar a configuração DNS."}
               </s-paragraph>
-            )}
-            <s-text color="subdued">
+            ) : <s-paragraph>Os registros ainda não foram retornados. Atualize o status para tentar novamente.</s-paragraph>}
+            {domain ? <s-text color="subdued">
               Última verificação:{" "}
               {domain?.lastCheckedAt
                 ? new Date(domain.lastCheckedAt).toLocaleString("pt-BR")
                 : "ainda não verificado"}
-            </s-text>
-            <s-button-group gap="base">
-              <Form method="post">
+            </s-text> : null}
+            <s-stack direction="inline" gap="base">
+              {dns.showSetup ? <Form method="post">
                 <input type="hidden" name="intent" value="setup" />
-                <s-button type="submit">Configurar domínio</s-button>
-              </Form>
-              <Form method="post">
+                <s-button type="submit" variant="primary" loading={progress.intent === "setup"} disabled={progress.submitting}>Iniciar configuração DNS</s-button>
+              </Form> : null}
+              {dns.showVerify ? <Form method="post">
                 <input type="hidden" name="intent" value="verify" />
-                <s-button type="submit">Verificar configuração</s-button>
-              </Form>
-              <Form method="post">
+                <s-button type="submit" loading={progress.intent === "verify"} disabled={progress.submitting}>Verificar DNS</s-button>
+              </Form> : null}
+              {dns.showRefresh ? <Form method="post">
                 <input type="hidden" name="intent" value="refresh" />
-                <s-button type="submit">Atualizar status</s-button>
-              </Form>
-              <Form method="post">
+                <s-button type="submit" loading={progress.intent === "refresh"} disabled={progress.submitting}>Atualizar status</s-button>
+              </Form> : null}
+              {dns.showTest ? <Form method="post">
                 <input type="hidden" name="intent" value="test" />
-                <s-button type="submit" disabled={!activeDomain?.sendingVerified || !settings?.activeFromEmail}>
+                <s-button type="submit" loading={progress.intent === "test"} disabled={progress.submitting || !activeDomain?.sendingVerified || !settings?.activeFromEmail}>
                   Enviar teste para equipe
                 </s-button>
-              </Form>
-            </s-button-group>
+              </Form> : null}
+            </s-stack>
           </s-stack>
         </s-section>
       </s-stack>
