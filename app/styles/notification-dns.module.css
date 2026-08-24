@@ -1,0 +1,60 @@
+.recordsContainer {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.desktopRecords {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.mobileRecords {
+  display: none;
+}
+
+.breakableValue {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.recordCardContent {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.recordField {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.35fr) minmax(0, 1fr);
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.recordLabel {
+  font-weight: 600;
+}
+
+@media (max-width: 64rem) {
+  .desktopRecords {
+    display: none;
+  }
+
+  .mobileRecords {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+    min-width: 0;
+  }
+
+  .recordField {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
+}

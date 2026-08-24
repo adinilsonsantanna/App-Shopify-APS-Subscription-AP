@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { MetaFunction } from "react-router";
 import {
   Form,
   useActionData,
@@ -21,6 +22,12 @@ import {
   buildNotificationDnsState,
   notificationActionProgress,
 } from "../lib/notification-dns-ui";
+import { copyDnsValue } from "../lib/notification-clipboard";
+import styles from "../styles/notification-dns.module.css";
+
+export const meta: MetaFunction = () => [
+  { title: "Notificações transacionais" },
+];
 const statusLabel: Record<string, string> = {
   not_configured: "Não configurado",
   not_started: "Aguardando DNS",
@@ -52,14 +59,31 @@ export default function NotificationsPage() {
       navigation.state,
       navigation.formData,
     ),
-    { domain, activeDomain } = dns;
+    { domain, activeDomain } = dns,
+    [copyFeedback, setCopyFeedback] = useState<{
+      key: string;
+      ok: boolean;
+      message: string;
+    } | null>(null),
+    copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (result?.ok) shopify.toast.show(result.message);
   }, [result, shopify]);
-  const copy = (value: string) =>
-    navigator.clipboard
-      .writeText(value)
-      .then(() => shopify.toast.show("Copiado."));
+  useEffect(
+    () => () => {
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+    },
+    [],
+  );
+  const copy = async (key: string, value: string) => {
+    const feedback = await copyDnsValue(value);
+    setCopyFeedback({ key, ...feedback });
+    if (feedback.ok) shopify.toast.show("Copiado");
+    if (copyTimer.current) clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopyFeedback(null), 2_000);
+  };
+  const copyLabel = (key: string, fallback: string) =>
+    copyFeedback?.ok && copyFeedback.key === key ? "Copiado" : fallback;
   return (
     <s-page heading="Notificações transacionais" inlineSize="large">
       {loadError ? <s-banner heading="Não foi possível carregar" tone="critical">{loadError}</s-banner> : null}
@@ -167,13 +191,16 @@ export default function NotificationsPage() {
           <s-stack direction="block" gap="base">
             {domainsError ? <s-banner heading="Falha ao carregar domínios" tone="critical">{domainsError} Tente atualizar o status novamente.</s-banner> : null}
             {dns.recoverableError ? <s-banner heading="A verificação DNS encontrou um problema" tone="critical">Os registros continuam disponíveis. Verifique o DNS e tente verificar ou atualizar o status novamente.</s-banner> : null}
+            {copyFeedback && !copyFeedback.ok ? <s-banner heading="Não foi possível copiar" tone="critical">{copyFeedback.message}</s-banner> : null}
             <s-text>Domínio: {domain?.domain || "Não configurado"}</s-text>
             <s-badge tone={domain?.sendingVerified ? "success" : "caution"}>
               {statusLabel[domain?.status || "not_configured"] ||
                 domain?.status}
             </s-badge>
             {domain?.records?.length ? (
-              <s-table variant="auto">
+              <div className={styles.recordsContainer}>
+                <div className={styles.desktopRecords}>
+                  <s-table variant="auto">
                 <s-table-header-row>
                   <s-table-header listSlot="primary">Finalidade</s-table-header>
                   <s-table-header>Tipo</s-table-header>
@@ -185,12 +212,15 @@ export default function NotificationsPage() {
                   <s-table-header>Ações</s-table-header>
                 </s-table-header-row>
                 <s-table-body>
-                  {domain.records.map((record) => (
+                  {domain.records.map((record, index) => {
+                    const hostKey = `${index}:host`;
+                    const valueKey = `${index}:value`;
+                    return (
                     <s-table-row key={`${record.type}:${record.name}:${record.value}`}>
                       <s-table-cell>{record.purpose}</s-table-cell>
                       <s-table-cell>{record.type}</s-table-cell>
-                      <s-table-cell>{record.name}</s-table-cell>
-                      <s-table-cell>{record.value}</s-table-cell>
+                      <s-table-cell><span className={styles.breakableValue}>{record.name}</span></s-table-cell>
+                      <s-table-cell><span className={styles.breakableValue}>{record.value}</span></s-table-cell>
                       <s-table-cell>{record.priority ?? "—"}</s-table-cell>
                       <s-table-cell>{record.ttl || "—"}</s-table-cell>
                       <s-table-cell>{record.status}</s-table-cell>
@@ -198,22 +228,47 @@ export default function NotificationsPage() {
                         <s-button-group gap="base">
                           <s-button
                             type="button"
-                            onClick={() => copy(record.name)}
+                            disabled={!record.name}
+                            onClick={() => copy(hostKey, record.name)}
                           >
-                            Copiar nome
+                            {copyLabel(hostKey, "Copiar host")}
                           </s-button>
                           <s-button
                             type="button"
-                            onClick={() => copy(record.value)}
+                            disabled={!record.value}
+                            onClick={() => copy(valueKey, record.value)}
                           >
-                            Copiar valor
+                            {copyLabel(valueKey, "Copiar valor")}
                           </s-button>
                         </s-button-group>
                       </s-table-cell>
                     </s-table-row>
-                  ))}
+                  );})}
                 </s-table-body>
-              </s-table>
+                  </s-table>
+                </div>
+                <div className={styles.mobileRecords}>
+                  {domain.records.map((record, index) => {
+                    const hostKey = `${index}:mobile-host`;
+                    const valueKey = `${index}:mobile-value`;
+                    return <s-box key={`mobile:${record.type}:${record.name}:${record.value}`} padding="base" border="base" borderRadius="base">
+                      <div className={styles.recordCardContent}>
+                        <div className={styles.recordField}><span className={styles.recordLabel}>Finalidade</span><span className={styles.breakableValue}>{record.purpose}</span></div>
+                        <div className={styles.recordField}><span className={styles.recordLabel}>Tipo</span><span className={styles.breakableValue}>{record.type}</span></div>
+                        <div className={styles.recordField}><span className={styles.recordLabel}>Nome/host</span><span className={styles.breakableValue}>{record.name}</span></div>
+                        <div className={styles.recordField}><span className={styles.recordLabel}>Valor/destino</span><span className={styles.breakableValue}>{record.value}</span></div>
+                        {record.priority != null ? <div className={styles.recordField}><span className={styles.recordLabel}>Prioridade</span><span>{record.priority}</span></div> : null}
+                        {record.ttl ? <div className={styles.recordField}><span className={styles.recordLabel}>TTL</span><span>{record.ttl}</span></div> : null}
+                        <div className={styles.recordField}><span className={styles.recordLabel}>Status</span><span className={styles.breakableValue}>{record.status}</span></div>
+                        <s-button-group gap="base">
+                          <s-button type="button" disabled={!record.name} onClick={() => copy(hostKey, record.name)}>{copyLabel(hostKey, "Copiar host")}</s-button>
+                          <s-button type="button" disabled={!record.value} onClick={() => copy(valueKey, record.value)}>{copyLabel(valueKey, "Copiar valor")}</s-button>
+                        </s-button-group>
+                      </div>
+                    </s-box>;
+                  })}
+                </div>
+              </div>
             ) : dns.state === "NOT_CONFIGURED" ? (
               <s-paragraph>
                 {settings?.fromEmail
