@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import type { ActionFunctionArgs } from "react-router";
 import {
   Form,
   useActionData,
@@ -10,12 +10,13 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import {
   domainAction,
-  getNotificationSettings,
-  getSendingDomains,
   saveNotificationSettings,
   sendNotificationTest,
-  type SendingDomain,
 } from "../lib/notification-settings-api.server";
+import {
+  createNotificationPageLoader,
+  notificationPageApi,
+} from "../lib/notification-page.server";
 const FREQUENCIES = new Set([
   "IMMEDIATELY",
   "DAILY_SUMMARY",
@@ -33,12 +34,10 @@ const statusLabel: Record<string, string> = {
   failed: "Falhou",
   disabled: "Desativado",
 };
-export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
-  const settings = await getNotificationSettings(session.shop);
-  try { return { settings, domains: await getSendingDomains(session.shop), domainsError: null }; }
-  catch (error) { return { settings, domains: [] as SendingDomain[], domainsError: error instanceof Error ? error.message : "Não foi possível carregar os domínios." }; }
-}
+export const loader = createNotificationPageLoader({
+  authenticateAdmin: authenticate.admin,
+  ...notificationPageApi,
+});
 export async function action({ request }: ActionFunctionArgs) {
   const { session } = await authenticate.admin(request),
     form = await request.formData(),
@@ -87,21 +86,21 @@ export async function action({ request }: ActionFunctionArgs) {
       renewalSucceededEnabled: form.get("renewalSucceededEnabled") === "on",
     });
     return { ok: true, message: "Configurações de notificações salvas." };
-  } catch (error) {
+  } catch {
     return {
       ok: false,
       message:
-        error instanceof Error ? error.message : "Operação não confirmada.",
+        "A operação não foi confirmada pela API Central. Tente novamente.",
     };
   }
 }
 export default function NotificationsPage() {
-  const { settings, domains, domainsError } = useLoaderData<typeof loader>(),
+  const { settings, domains, loadError, domainsError } = useLoaderData<typeof loader>(),
     result = useActionData<typeof action>(),
     navigation = useNavigation(),
     shopify = useAppBridge(),
-    activeDomain = domains.find((item) => item.id === settings.activeSendingDomain?.id),
-    pendingDomain = domains.find((item) => item.domain === settings.fromEmail?.split("@")[1] && item.id !== activeDomain?.id),
+    activeDomain = domains.find((item) => item.id === settings?.activeSendingDomain?.id),
+    pendingDomain = domains.find((item) => item.domain === settings?.fromEmail?.split("@")[1] && item.id !== activeDomain?.id),
     domain = pendingDomain || activeDomain || domains[0];
   useEffect(() => {
     if (result?.ok) shopify.toast.show(result.message);
@@ -112,13 +111,14 @@ export default function NotificationsPage() {
       .then(() => shopify.toast.show("Copiado."));
   return (
     <s-page heading="Notificações transacionais" inlineSize="large">
+      {loadError ? <s-banner heading="Não foi possível carregar" tone="critical">{loadError}</s-banner> : null}
       {result && !result.ok ? (
         <s-banner heading="Não foi possível concluir" tone="critical">
           {result.message}
         </s-banner>
       ) : null}
       <s-stack direction="block" gap="large">
-        <Form method="post" data-save-bar data-discard-confirmation>
+        {settings ? <Form method="post" data-save-bar data-discard-confirmation>
           <input type="hidden" name="intent" value="save" />
           <s-section heading="Remetente e equipe">
             <s-stack direction="block" gap="base">
@@ -211,7 +211,7 @@ export default function NotificationsPage() {
               </s-stack>
             </s-stack>
           </s-section>
-        </Form>
+        </Form> : null}
         <s-section heading="Configuração DNS">
           <s-stack direction="block" gap="base">
             {domainsError ? <s-banner heading="Falha ao carregar domínios" tone="critical">{domainsError} Tente atualizar o status novamente.</s-banner> : null}
@@ -291,7 +291,7 @@ export default function NotificationsPage() {
               </Form>
               <Form method="post">
                 <input type="hidden" name="intent" value="test" />
-                <s-button type="submit" disabled={!activeDomain?.sendingVerified || !settings.activeFromEmail}>
+                <s-button type="submit" disabled={!activeDomain?.sendingVerified || !settings?.activeFromEmail}>
                   Enviar teste para equipe
                 </s-button>
               </Form>

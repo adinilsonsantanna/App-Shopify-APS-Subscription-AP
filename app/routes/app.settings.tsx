@@ -5,11 +5,12 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { loadRetrySettingsWithMigration, retrySettingsRequest } from "../lib/retry-settings-api.server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { embeddedAppPath } from "../lib/embedded-navigation";
 
 const ACTIONS = new Set(["PAUSE_AND_NOTIFY", "CANCEL_AND_NOTIFY", "SKIP_AND_NOTIFY"]);
 const FREQUENCIES = new Set(["IMMEDIATELY", "DAILY_SUMMARY", "WEEKLY_SUMMARY", "NEVER"]);
 function boundedInteger(formData: FormData, name: string, min: number, max: number) { const value = Number(formData.get(name)); return Number.isInteger(value) && value >= min && value <= max ? value : null; }
-export const loader = async ({ request }: LoaderFunctionArgs) => { const { session } = await authenticate.admin(request); const settings = await loadRetrySettingsWithMigration(session.shop, prisma.billingRetrySettings); return { settings, notificationsUrl: "/app/notifications" }; };
+export const loader = async ({ request }: LoaderFunctionArgs) => { const { session } = await authenticate.admin(request); const settings = await loadRetrySettingsWithMigration(session.shop, prisma.billingRetrySettings); return { settings, notificationsUrl: embeddedAppPath(request, "/app/notifications") }; };
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request); const formData = await request.formData();
   const paymentRetryAttempts = boundedInteger(formData, "paymentRetryAttempts", 0, 10), paymentRetryDays = boundedInteger(formData, "paymentRetryDays", 1, 14), inventoryRetryAttempts = boundedInteger(formData, "inventoryRetryAttempts", 0, 10), inventoryRetryDays = boundedInteger(formData, "inventoryRetryDays", 1, 14);
@@ -26,7 +27,7 @@ export default function SettingsPage() {
       <s-select label="Ação ao esgotar as tentativas" name="paymentFailureAction" value={settings.paymentFailureAction}><s-option value="PAUSE_AND_NOTIFY">Pausar assinatura e notificar</s-option><s-option value="CANCEL_AND_NOTIFY">Cancelar assinatura e notificar</s-option><s-option value="SKIP_AND_NOTIFY">Pular ciclo e notificar</s-option></s-select><s-divider /><s-heading>Estoque insuficiente</s-heading>
       <s-grid gridTemplateColumns="1fr 1fr" gap="base"><s-stack direction="block" gap="small"><s-number-field label="Número de novas verificações" name="inventoryRetryAttempts" value={String(settings.inventoryRetryAttempts)} min={0} max={10} step={1} required /><s-text color="subdued">Mínimo 0, máximo 10</s-text></s-stack><s-stack direction="block" gap="small"><s-number-field label="Dias entre novas verificações de estoque" name="inventoryRetryDays" value={String(settings.inventoryRetryDays)} min={1} max={14} step={1} required /><s-text color="subdued">Mínimo 1, máximo 14 dias</s-text></s-stack></s-grid>
       <s-select label="Ação ao esgotar as verificações" name="inventoryFailureAction" value={settings.inventoryFailureAction}><s-option value="SKIP_AND_NOTIFY">Pular ciclo e notificar</s-option><s-option value="PAUSE_AND_NOTIFY">Pausar assinatura e notificar</s-option><s-option value="CANCEL_AND_NOTIFY">Cancelar assinatura e notificar</s-option></s-select>
-      <s-select label="Frequência de notificações para a equipe" name="teamNotificationFrequency" value={settings.teamNotificationFrequency}><s-option value="IMMEDIATELY">Imediatamente</s-option><s-option value="DAILY_SUMMARY">Resumo diário</s-option><s-option value="WEEKLY_SUMMARY">Resumo semanal</s-option><s-option value="NEVER">Nunca</s-option></s-select><s-link href={notificationsUrl} target="_top">Editar notificações</s-link><s-stack direction="inline" justifyContent="end"><s-button type="submit" variant="primary" loading={navigation.state === "submitting"}>Salvar</s-button></s-stack>
+      <s-select label="Frequência de notificações para a equipe" name="teamNotificationFrequency" value={settings.teamNotificationFrequency}><s-option value="IMMEDIATELY">Imediatamente</s-option><s-option value="DAILY_SUMMARY">Resumo diário</s-option><s-option value="WEEKLY_SUMMARY">Resumo semanal</s-option><s-option value="NEVER">Nunca</s-option></s-select><s-link href={notificationsUrl}>Editar notificações</s-link><s-stack direction="inline" justifyContent="end"><s-button type="submit" variant="primary" loading={navigation.state === "submitting"}>Salvar</s-button></s-stack>
     </s-stack></s-section>
   </s-grid></Form></s-page>;
 }

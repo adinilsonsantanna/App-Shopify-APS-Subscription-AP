@@ -57,18 +57,26 @@ export async function notificationApi(
   try {
     const encodedShop = encodeURIComponent(shop);
     const endpoint = path.includes(":shop") ? path.replace(":shop", encodedShop) : `${path}/${encodedShop}`;
-    const response = await dependencies.fetchFn(
-      `${dependencies.baseUrl.replace(/\/$/, "")}/api/notifications/${endpoint}`,
-      {
-        method,
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": dependencies.apiKey,
+    let response: Response;
+    try {
+      response = await dependencies.fetchFn(
+        `${dependencies.baseUrl.replace(/\/$/, "")}/api/notifications/${endpoint}`,
+        {
+          method,
+          headers: {
+            "content-type": "application/json",
+            "x-api-key": dependencies.apiKey,
+          },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+          signal: controller.signal,
         },
-        ...(body ? { body: JSON.stringify(body) } : {}),
-        signal: controller.signal,
-      },
-    );
+      );
+    } catch (error) {
+      // Some adapters surface HTTP responses by throwing them. A successful
+      // response is still data and must never reach React Router's boundary.
+      if (!(error instanceof Response)) throw error;
+      response = error;
+    }
     const value = (await response.json()) as {
       success?: boolean;
       data?: unknown;
