@@ -7,14 +7,14 @@ test("authenticated production adapters preserve one correlation envelope from w
   const correlationId = "scope9:shop-a:cycle-2026-08", contractId = "gid://shopify/SubscriptionContract/9";
   let forwarded: any;
   const forward = createShopifyWebhookForwarder({
-    authenticateWebhook: async () => ({ shop: "shop-a.myshopify.com", topic: "SUBSCRIPTION_CONTRACTS_CREATE", payload: { admin_graphql_api_id: contractId, revision_id: "revision-1" }, admin: { graphql: async () => Response.json({}) } }),
     fetchFn: async (_url, init) => { forwarded = JSON.parse(String(init?.body)); return Response.json({ processed: true }); },
     environment: { API_SUBSCRIPTION_URL: "https://central.example.test", API_KEY: "internal-secret" },
     now: () => new Date("2026-08-31T12:00:00.000Z"),
     loadContract: async () => ({ shopifyShopId: "gid://shopify/Shop/9", contract: { id: contractId, status: "ACTIVE", nextBillingAt: "2026-08-31T12:00:00.000Z", currencyCode: "BRL", originOrder: { id: "gid://shopify/Order/initial", amount: "99.90", currencyCode: "BRL", financialStatus: "PAID" }, customer: { id: "gid://shopify/Customer/9", email: "customer@example.test" }, billingPolicy: { interval: "MONTH", intervalCount: 1 }, deliveryPolicy: { interval: "MONTH", intervalCount: 1 }, lines: [{ id: "gid://shopify/SubscriptionLine/9", productId: "gid://shopify/Product/9", variantId: "gid://shopify/ProductVariant/9", sellingPlanId: "gid://shopify/SellingPlan/9", quantity: 2, currentPrice: { amount: "49.95", currencyCode: "BRL" } }] } }),
     logger: { info() {}, error() {} },
   });
-  await forward(new Request("https://app.example.test/webhook", { method: "POST", headers: { "x-shopify-webhook-id": `${correlationId}:webhook:first`, "x-shopify-event-id": `${correlationId}:event:first` } }), "subscription_contracts/create");
+  const request = new Request("https://app.example.test/webhook", { method: "POST" });
+  await forward(request, "subscription_contracts/create", { shop: "shop-a.myshopify.com", topic: "SUBSCRIPTION_CONTRACTS_CREATE", payload: { admin_graphql_api_id: contractId, revision_id: "revision-1" }, webhookId: `${correlationId}:webhook:first`, eventId: `${correlationId}:event:first`, triggeredAt: "2026-08-31T12:00:00.000Z", admin: { graphql: async () => Response.json({}) } });
   assert.equal(forwarded.contract.id, contractId);
   assert.equal(forwarded.contract.lines[0].sellingPlanId, "gid://shopify/SellingPlan/9");
   assert.notEqual(forwarded.webhookId, forwarded.shopifyEventId);

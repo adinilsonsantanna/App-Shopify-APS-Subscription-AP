@@ -1,10 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  createShopifyWebhookForwarder,
+  createShopifyWebhookForwarder as createProductionShopifyWebhookForwarder,
+  type AuthenticatedWebhookResult,
   type WebhookForwarderDependencies,
 } from "./shopify-webhook-forwarder.server";
 import { processAppUninstalledWebhook } from "./app-uninstalled.server";
+
+type TestDependencies = WebhookForwarderDependencies & { authenticateWebhook(request: Request): Promise<AuthenticatedWebhookResult> };
+
+function createShopifyWebhookForwarder(dependencies: TestDependencies) {
+  const { authenticateWebhook, ...productionDependencies } = dependencies;
+  const forward = createProductionShopifyWebhookForwarder(productionDependencies);
+  return async (request: Request, topic: Parameters<typeof forward>[1], authenticated?: AuthenticatedWebhookResult) =>
+    forward(request, topic, authenticated ?? await authenticateWebhook(request));
+}
 
 interface CapturedLog {
   message: string;
@@ -19,10 +29,10 @@ function request(method = "POST", webhookId = "webhook-1", eventId?: string) {
   });
 }
 
-function dependencies(overrides: Partial<WebhookForwarderDependencies> = {}) {
+function dependencies(overrides: Partial<TestDependencies> = {}) {
   const logs: CapturedLog[] = [];
   const calls: Array<{ input: string | URL | Request; init?: RequestInit }> = [];
-  const value: WebhookForwarderDependencies = {
+  const value: TestDependencies = {
     authenticateWebhook: async () => ({
       shop: "known.myshopify.com",
       topic: "SUBSCRIPTION_CONTRACTS_CREATE",
@@ -247,6 +257,7 @@ test("aborts Central API forwarding at the shared deadline", async () => {
 test("uninstall forwards to the Central API before deleting sessions", async () => {
   const order: string[] = [];
   const response = await processAppUninstalledWebhook(request(), {
+    authenticate: async () => ({ shop: "known.myshopify.com", topic: "APP_UNINSTALLED", payload: {}, triggeredAt: "2026-08-14T12:00:00.000Z" }),
     forward: async () => {
       order.push("forward");
       return {
@@ -269,9 +280,56 @@ test("uninstall redelivery is idempotent when the authenticated session is alrea
   let deletes = 0;
   const { processAppUninstalledWebhook } = await import("./app-uninstalled.server");
   const response = await processAppUninstalledWebhook(new Request("https://app.test/webhooks/app/uninstalled", { method: "POST" }), {
+    authenticate: async () => ({ shop: "one.myshopify.com", topic: "APP_UNINSTALLED", payload: {}, triggeredAt: "2026-08-14T12:00:00.000Z" }),
     forward: async () => ({ shop: "one.myshopify.com", topic: "APP_UNINSTALLED", payload: {} }),
     deleteSessions: async () => { deletes += 1; },
   });
   assert.equal(response.status, 200);
   assert.equal(deletes, 0);
+});
+
+test("uninstall usa authenticate.webhook().triggeredAt e passa o contexto ao forwarder", async () => {
+  const authenticated = { shop: "one.myshopify.com", topic: "APP_UNINSTALLED", payload: { id: 1 }, triggeredAt: "2026-08-14T12:00:00.000Z", webhookId: "delivery-1", eventId: "event-1" };
+  let forwarded: unknown;
+  await processAppUninstalledWebhook(request(), {
+    authenticate: async () => authenticated,
+    forward: async (_request, _topic, context) => { forwarded = context; return context; },
+    deleteSessions: async () => undefined,
+  });
+  assert.equal(forwarded, authenticated);
+});
+
+test("forwarder recebe triggeredAt autenticado sem consultar header bruto", async () => {
+  const setup = dependencies();
+  const raw = request("POST", "delivery-header");
+  raw.headers.set("x-shopify-triggered-at", "1999-01-01T00:00:00.000Z");
+  await createShopifyWebhookForwarder(setup.value)(raw, "app/uninstalled", { shop: "one.myshopify.com", topic: "APP_UNINSTALLED", payload: { id: 1 }, triggeredAt: "2026-08-14T12:00:00.000Z", webhookId: "delivery-auth", eventId: "event-auth" });
+  const body = JSON.parse(String(setup.calls[0]?.init?.body));
+  assert.equal(body.triggeredAt, "2026-08-14T12:00:00.000Z");
+  assert.equal(body.webhookId, "delivery-auth");
+  assert.equal(body.shopifyEventId, "event-auth");
+  assert.equal(body.shopifyShopId, "gid://shopify/Shop/1");
+});
+
+test("triggeredAt ausente retorna retryable e não encaminha uninstall", async () => {
+  const setup = dependencies();
+  await rejectsWithStatus(createShopifyWebhookForwarder(setup.value)(request(), "app/uninstalled", { shop: "one.myshopify.com", topic: "APP_UNINSTALLED", payload: { id: 1 } }), 503);
+  assert.equal(setup.calls.length, 0);
+  assert.equal(JSON.stringify(setup.logs).includes("super-secret-api-key"), false);
+});
+
+test("triggeredAt inválido retorna retryable e não usa Date.now como fallback", async () => {
+  const setup = dependencies();
+  await rejectsWithStatus(createShopifyWebhookForwarder(setup.value)(request(), "app/uninstalled", { shop: "one.myshopify.com", topic: "APP_UNINSTALLED", payload: { id: 1 }, triggeredAt: "invalid" }), 503);
+  assert.equal(setup.calls.length, 0);
+});
+
+test("redelivery preserva webhook ID e event ID", async () => {
+  const setup = dependencies();
+  const authenticated = { shop: "one.myshopify.com", topic: "APP_UNINSTALLED", payload: { id: 1 }, triggeredAt: "2026-08-14T12:00:00.000Z", webhookId: "delivery-same", eventId: "event-same" };
+  const forward = createShopifyWebhookForwarder(setup.value);
+  await forward(request(), "app/uninstalled", authenticated);
+  await forward(request(), "app/uninstalled", authenticated);
+  const bodies = setup.calls.map((call) => JSON.parse(String(call.init?.body)));
+  assert.equal(bodies.every((body) => body.webhookId === "delivery-same" && body.shopifyEventId === "event-same"), true);
 });
