@@ -264,3 +264,14 @@ test("uninstall forwards to the Central API before deleting sessions", async () 
   assert.equal(response.status, 200);
   assert.deepEqual(order, ["forward", "delete-sessions"]);
 });
+
+test("uninstall redelivery is idempotent when the authenticated session is already gone", async () => {
+  let deletes = 0;
+  const { processAppUninstalledWebhook } = await import("./app-uninstalled.server");
+  const response = await processAppUninstalledWebhook(new Request("https://app.test/webhooks/app/uninstalled", { method: "POST" }), {
+    forward: async () => ({ shop: "one.myshopify.com", topic: "APP_UNINSTALLED", payload: {} }),
+    deleteSessions: async () => { deletes += 1; },
+  });
+  assert.equal(response.status, 200);
+  assert.equal(deletes, 0);
+});
