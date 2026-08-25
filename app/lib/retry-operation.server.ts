@@ -15,6 +15,7 @@ function attemptEnvelope(attempt: any): Envelope {
 
 export async function handleRetryOperation(request: Request, dependencies: RetryOperationDependencies) {
   if (request.method !== "POST") return jsonError(405, "method_not_allowed");
+  if (!request.headers.get("x-api-key")) return jsonError(401, "unauthorized");
   if (!secretMatches(request.headers.get("x-api-key") || "", dependencies.apiKey)) return jsonError(403, "forbidden");
   let body: Record<string, any>; try { body = await request.json(); } catch { return jsonError(400, "invalid_json"); }
   const shop = String(body.shop || "").toLowerCase(), contractId = String(body.contractId || ""), operation = String(body.operation || ""), idempotencyKey = String(body.idempotencyKey || "");

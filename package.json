@@ -19,7 +19,11 @@
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
     "typecheck": "react-router typegen && tsc --noEmit",
-    "test": "node --require ./scripts/windows-node-user-shim.cjs --import tsx --test app/lib/*.server.test.ts extensions/minha-assinatura/src/*.test.js"
+    "test": "node --require ./scripts/windows-node-user-shim.cjs --import tsx --test app/lib/*.server.test.ts extensions/minha-assinatura/src/*.test.js",
+    "test:integration": "node --require ./scripts/windows-node-user-shim.cjs --import tsx --test app/lib/retry-operation.server.test.ts app/lib/recurring-order-idempotency.server.test.ts app/lib/subscription-lifecycle.server.test.ts",
+    "test:contract": "node --require ./scripts/windows-node-user-shim.cjs --import tsx --test app/lib/shopify-webhook-forwarder.server.test.ts app/lib/retry-operation.server.test.ts app/lib/subscription-lifecycle.server.test.ts",
+    "test:full-cycle": "npm test",
+    "test:live:dry-run": "node scripts/live-subscription-smoke.mjs"
   },
   "type": "module",
   "engines": {

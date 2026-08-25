@@ -1,0 +1,10 @@
+const enabled = process.env.ENABLE_LIVE_SUBSCRIPTION_TESTS === "true";
+const shop = String(process.env.LIVE_SUBSCRIPTION_TEST_SHOP || "").toLowerCase();
+const allowlist = new Set(String(process.env.LIVE_SUBSCRIPTION_TEST_ALLOWLIST || "").toLowerCase().split(",").map(value => value.trim()).filter(Boolean));
+const gateway = String(process.env.LIVE_SUBSCRIPTION_TEST_GATEWAY || "").toLowerCase();
+console.log(JSON.stringify({ mode: "dry-run", enabled, shop: shop || null, gateway: gateway || null, plan: ["authenticate a development-shop session", "forward uniquely tagged simulated lifecycle inputs", "record webhook and event correlation IDs", "clean only test-tagged fixtures"] }, null, 2));
+if (!enabled) process.exit(0);
+if (!shop || !allowlist.has(shop)) throw new Error("Live smoke refused: development shop must be explicitly allowlisted");
+if (/betterlife/i.test(shop)) throw new Error("Live smoke refused: Betterlife domains are forbidden");
+if (!["stripe-test", "shopify-test"].includes(gateway)) throw new Error("Live smoke refused: a test gateway is required");
+console.log("Dry-run only. No external mutation was executed.");
