@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
 import type { LoaderFunctionArgs } from "react-router";
-import { useFetcher, useLoaderData } from "react-router";
+import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import { getDashboardMetrics } from "../lib/dashboard.server";
 
@@ -49,20 +48,6 @@ function MetricCard({ label, value, detail }: { label: string; value: string | n
 
 export default function Dashboard() {
   const { metrics, error } = useLoaderData<typeof loader>();
-  const installFetcher = useFetcher<{ success?: boolean; error?: string }>();
-  const [syncError, setSyncError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (installFetcher.state === "idle" && !installFetcher.data) {
-      installFetcher.submit(null, { method: "POST", action: "/api/install" });
-    }
-  }, [installFetcher]);
-
-  useEffect(() => {
-    if (installFetcher.data && !installFetcher.data.success) {
-      setSyncError(installFetcher.data.error ?? "Falha ao sincronizar a loja com a API central.");
-    }
-  }, [installFetcher.data]);
 
   const revenue = new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -75,8 +60,6 @@ export default function Dashboard() {
         <s-paragraph>Acompanhe o desempenho das assinaturas gerenciadas pelo APS Subscription.</s-paragraph>
 
         {error && <s-banner heading="Indicadores temporariamente indisponíveis" tone="warning">{error}</s-banner>}
-        {syncError && <s-banner heading="Falha na sincronização com a API central" tone="warning">{syncError}</s-banner>}
-
         <s-section heading="Desempenho">
           <s-stack direction="block" gap="base">
             <s-stack direction="inline" gap="small" alignItems="center">
