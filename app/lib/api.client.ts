@@ -28,19 +28,6 @@ async function apiFetch(path: string, options: RequestInit = {}) {
     return response.json();
 }
 
-export async function installShopOnApi(data: {
-    shopifyShopId?: string;
-    name: string;
-    domain: string;
-    accessToken: string;
-    scopes: string;
-}) {
-    return apiFetch("/api/shop/install", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
-}
-
 export async function getShopFromApi(domain: string) {
     return apiFetch(`/api/shop/${domain}`);
 }
