@@ -2,6 +2,14 @@ import type { AdminReconciliationDependencies } from "./administrative-billing-r
 
 type Handler = (request: Request, dependencies: AdminReconciliationDependencies) => Promise<Response>;
 
+export const ADMIN_RECONCILIATION_DRY_RUN_TARGETS = {
+  subscriptionBillingAttemptId: "gid://shopify/SubscriptionBillingAttempt/433329242475",
+  subscriptionContractId: "gid://shopify/SubscriptionContract/166901350763",
+  shopifyOrderId: "gid://shopify/Order/11536855662955",
+  cycleOriginTime: "2026-09-27T16:00:00Z",
+  correlationId: "scope9-live-20260826144821-a2c3d40d",
+} as const;
+
 export interface AdministrativeReconciliationRouteDependencies {
   loadAuthenticate(): Promise<AdminReconciliationDependencies["authenticate"]>;
   loadHandler(): Promise<Handler>;
@@ -10,6 +18,7 @@ export interface AdministrativeReconciliationRouteDependencies {
   requestId(): string;
   apiUrl?: string;
   apiKey?: string;
+  allowedTargets?: AdminReconciliationDependencies["allowedTargets"];
 }
 
 function safeErrorClass(error: unknown) {
@@ -69,6 +78,7 @@ export async function runAdministrativeBillingReconciliationAction(
       apiKey: dependencies.apiKey,
       logger: dependencies.logger,
       requestId,
+      allowedTargets: dependencies.allowedTargets ?? ADMIN_RECONCILIATION_DRY_RUN_TARGETS,
     });
   } catch (error) {
     logFailure(dependencies.logger, "administrative_reconciliation.unhandled_failure", requestId, error);
