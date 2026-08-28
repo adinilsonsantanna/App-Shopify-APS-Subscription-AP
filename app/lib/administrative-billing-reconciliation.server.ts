@@ -7,6 +7,13 @@ export type AdminReconciliationDependencies = {
   apiKey?: string;
   logger: Pick<Console, "error">;
   requestId: string;
+  allowedTargets?: {
+    subscriptionBillingAttemptId: string;
+    subscriptionContractId: string;
+    shopifyOrderId: string;
+    cycleOriginTime: string;
+    correlationId: string;
+  };
 };
 
 export const ADMINISTRATIVE_RECONCILIATION_QUERY = `#graphql
@@ -51,6 +58,8 @@ export async function handleAdministrativeBillingReconciliation(request: Request
   try { input = object(await request.json()); } catch { return jsonError(400, "invalid_json", dependencies.requestId); }
   const attemptId = input.subscriptionBillingAttemptId, expectedContractId = input.subscriptionContractId, expectedOrderId = input.shopifyOrderId, expectedCycle = input.cycleOriginTime, correlationId = input.correlationId;
   if (!gid(attemptId, "SubscriptionBillingAttempt") || !gid(expectedContractId, "SubscriptionContract") || !gid(expectedOrderId, "Order") || typeof expectedCycle !== "string" || Number.isNaN(Date.parse(expectedCycle)) || typeof correlationId !== "string" || !/^[A-Za-z0-9._:-]{8,160}$/.test(correlationId) || typeof input.dryRun !== "boolean") return jsonError(400, "invalid_target", dependencies.requestId);
+  if (input.dryRun !== true) return jsonError(400, "dry_run_required", dependencies.requestId);
+  if (dependencies.allowedTargets && (attemptId !== dependencies.allowedTargets.subscriptionBillingAttemptId || expectedContractId !== dependencies.allowedTargets.subscriptionContractId || expectedOrderId !== dependencies.allowedTargets.shopifyOrderId || expectedCycle !== dependencies.allowedTargets.cycleOriginTime || correlationId !== dependencies.allowedTargets.correlationId)) return jsonError(403, "target_not_authorized", dependencies.requestId);
   if (!dependencies.apiUrl) return jsonError(503, "api_subscription_url_missing", dependencies.requestId);
   if (!dependencies.apiKey) return jsonError(503, "api_key_missing", dependencies.requestId);
   try {
@@ -64,7 +73,7 @@ export async function handleAdministrativeBillingReconciliation(request: Request
     const completedAt = string(attempt.completedAt), amount = string(money.amount), currencyCode = string(money.currencyCode);
     if (!completedAt || !amount || !currencyCode) return jsonError(409, "shopify_reconciliation_incomplete", dependencies.requestId);
     const apiUrl = dependencies.apiUrl.replace(/\/$/, "");
-    const central = await dependencies.fetchFn(`${apiUrl}/api/administrative-reconciliation/billing-attempt`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": dependencies.apiKey }, body: JSON.stringify({ shopDomain: authenticated.session.shop.toLowerCase(), shopId: shop.id, subscriptionContractId: contract.id, subscriptionBillingAttemptId: attempt.id, shopifyOrderId: order.id, cycleOriginTime: attempt.originTime, status: "succeeded", amount, currencyCode, attemptedAt: completedAt, completedAt, test: true, gateway: "bogus", correlationId, dryRun: input.dryRun }) });
+    const central = await dependencies.fetchFn(`${apiUrl}/api/administrative-reconciliation/billing-attempt`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": dependencies.apiKey }, body: JSON.stringify({ shopDomain: authenticated.session.shop.toLowerCase(), shopId: shop.id, subscriptionContractId: contract.id, subscriptionBillingAttemptId: attempt.id, shopifyOrderId: order.id, cycleOriginTime: attempt.originTime, status: "succeeded", amount, currencyCode, attemptedAt: completedAt, completedAt, test: true, gateway: "bogus", correlationId, dryRun: true }) });
     let result: unknown;
     try { result = await central.json(); } catch (error) { logFailure(dependencies, "administrative_reconciliation.central_api_invalid_json", error, authenticated.session.shop); return jsonError(502, "central_api_invalid_response", dependencies.requestId); }
     return Response.json(result, { status: central.status });

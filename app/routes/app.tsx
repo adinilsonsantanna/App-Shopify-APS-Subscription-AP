@@ -23,6 +23,7 @@ export default function App() {
         <s-link href="/app/selling-plans">Selling Plans</s-link>
         <s-link href="/app/contracts">Contratos</s-link>
         <s-link href="/app/settings">Configurações</s-link>
+        <s-link href="/app/billing-reconciliation">Reconciliação (dry-run)</s-link>
       </s-app-nav>
       <Outlet />
     </AppProvider>

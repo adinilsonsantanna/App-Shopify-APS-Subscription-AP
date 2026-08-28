@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { runAdministrativeBillingReconciliationAction, type AdministrativeReconciliationRouteDependencies } from "./administrative-billing-reconciliation-route.server";
+import { runAdministrativeBillingReconciliationAction, ADMIN_RECONCILIATION_DRY_RUN_TARGETS, type AdministrativeReconciliationRouteDependencies } from "./administrative-billing-reconciliation-route.server";
 
 const request = () => new Request("https://app.test/app/billing-reconciliation", { method: "POST", body: "{}" });
 function dependencies(overrides: Partial<AdministrativeReconciliationRouteDependencies> = {}) {
@@ -45,4 +45,14 @@ test("unexpected handler failure never reaches the React Router HTML boundary", 
   assert.match(response.headers.get("content-type") || "", /application\/json/);
   assert.deepEqual(await response.json(), { error: "administrative_reconciliation_unhandled", requestId: "route-req-123" });
   assert.equal(JSON.stringify(setup.logs).includes("unexpected credential"), false);
+});
+
+test("default route allowlist pins the authorized dry-run targets", () => {
+  assert.deepEqual(ADMIN_RECONCILIATION_DRY_RUN_TARGETS, {
+    subscriptionBillingAttemptId: "gid://shopify/SubscriptionBillingAttempt/433329242475",
+    subscriptionContractId: "gid://shopify/SubscriptionContract/166901350763",
+    shopifyOrderId: "gid://shopify/Order/11536855662955",
+    cycleOriginTime: "2026-09-27T16:00:00Z",
+    correlationId: "scope9-live-20260826144821-a2c3d40d",
+  });
 });
