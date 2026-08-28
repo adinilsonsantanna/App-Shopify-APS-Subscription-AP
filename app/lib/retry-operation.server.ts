@@ -1,17 +1,20 @@
 import { timingSafeEqual } from "node:crypto";
 type AdminClient = { graphql(query: string, options: { variables: Record<string, unknown>; signal?: AbortSignal }): Promise<Response> };
 export type RetryOperationDependencies = { apiKey?: string; timeoutMs?: number; getAdmin(shop: string): Promise<{ admin: AdminClient; session?: { shop: string } }> };
-type Envelope = { success: boolean; errorCode: string | null; errorMessage: string | null; uncertain: boolean; billingAttemptId: string | null; orderId: string | null; amount: string | null; currencyCode: string | null; status?: string; available?: boolean; checks?: unknown[]; blocked?: unknown[] };
+type Envelope = { success: boolean; errorCode: string | null; errorMessage: string | null; uncertain: boolean; billingAttemptId: string | null; orderId: string | null; amount: string | null; currencyCode: string | null; cycleOriginTime?: string | null; attemptedAt?: string | null; completedAt?: string | null; status?: string; available?: boolean; checks?: unknown[]; blocked?: unknown[] };
 const envelope = (values: Partial<Envelope> = {}): Envelope => ({ success: false, errorCode: null, errorMessage: null, uncertain: false, billingAttemptId: null, orderId: null, amount: null, currencyCode: null, ...values });
 const jsonError = (status: number, errorCode: string, errorMessage = errorCode, uncertain = false) => Response.json(envelope({ errorCode, errorMessage, uncertain }), { status });
 function secretMatches(received: string, expected?: string) { if (!expected) return false; const a = Buffer.from(received), b = Buffer.from(expected); return a.length === b.length && timingSafeEqual(a, b); }
 function validIso(value: unknown) { return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) && !Number.isNaN(Date.parse(value)); }
 function attemptEnvelope(attempt: any): Envelope {
-  const money = attempt?.order?.currentTotalPriceSet?.shopMoney;
+  const stateType = attempt?.state?.__typename;
+  const order = attempt?.state?.order ?? attempt?.order;
+  const money = order?.currentTotalPriceSet?.shopMoney;
   if (!attempt?.id) return envelope({ errorCode: "invalid_shopify_response", errorMessage: "Shopify did not return a billing attempt", uncertain: true });
-  const status = !attempt.ready ? "pending" : attempt.order?.id ? "succeeded" : attempt.errorCode || attempt.errorMessage ? "failed" : "pending";
-  return envelope({ success: status !== "failed", status, uncertain: status === "pending", billingAttemptId: attempt.id, orderId: attempt.order?.id ?? null, amount: money?.amount ?? null, currencyCode: money?.currencyCode ?? null, errorCode: attempt.errorCode ?? null, errorMessage: attempt.errorMessage ?? null });
+  const status = stateType === "SubscriptionBillingAttemptSuccessState" ? "succeeded" : stateType === "SubscriptionBillingAttemptFailedState" ? "failed" : stateType === "SubscriptionBillingAttemptPendingState" ? "pending" : !attempt.ready ? "pending" : order?.id ? "succeeded" : attempt.errorCode || attempt.errorMessage ? "failed" : "pending";
+  return envelope({ success: status !== "failed", status, uncertain: status === "pending", billingAttemptId: attempt.id, orderId: order?.id ?? null, amount: money?.amount ?? null, currencyCode: money?.currencyCode ?? null, cycleOriginTime: attempt.originTime ?? null, attemptedAt: attempt.completedAt ?? null, completedAt: attempt.completedAt ?? null, errorCode: attempt.errorCode ?? null, errorMessage: attempt.errorMessage ?? null });
 }
+function isUnauthorized(error: unknown) { if (error instanceof Response) return error.status === 401; return Boolean(error && typeof error === "object" && "status" in error && Number((error as { status?: unknown }).status) === 401); }
 
 export async function handleRetryOperation(request: Request, dependencies: RetryOperationDependencies) {
   if (request.method !== "POST") return jsonError(405, "method_not_allowed");
@@ -23,7 +26,7 @@ export async function handleRetryOperation(request: Request, dependencies: Retry
   if (!["inventory", "charge", "reconcile"].includes(operation) || !/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey) || request.headers.get("idempotency-key") !== idempotencyKey) return jsonError(400, "invalid_operation");
   if ((operation === "charge" || (operation === "reconcile" && !body.billingAttemptId)) && !validIso(body.billingCycleAt)) return jsonError(400, "invalid_billing_cycle_at");
   if (operation === "reconcile" && body.billingAttemptId && !/^gid:\/\/shopify\/SubscriptionBillingAttempt\/[A-Za-z0-9_-]+$/.test(String(body.billingAttemptId))) return jsonError(400, "invalid_billing_attempt_id");
-  let authenticated; try { authenticated = await dependencies.getAdmin(shop); } catch { return jsonError(503, "shopify_session_unavailable", "Shopify session unavailable", true); }
+  let authenticated; try { authenticated = await dependencies.getAdmin(shop); } catch (error) { return isUnauthorized(error) ? jsonError(401, "shopify_reauthentication_required", "Authenticated Shopify reauthorization is required") : jsonError(503, "shopify_session_unavailable", "Shopify session unavailable", true); }
   if (!authenticated.session || authenticated.session.shop.toLowerCase() !== shop) return jsonError(403, "session_shop_mismatch");
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? 8_000);
   try {
@@ -41,13 +44,13 @@ export async function handleRetryOperation(request: Request, dependencies: Retry
     }
     if (operation === "reconcile" && body.billingAttemptId) {
       const response = await authenticated.admin.graphql(`#graphql
-        query ReconcileBillingAttempt($id: ID!) { subscriptionBillingAttempt(id: $id) { id idempotencyKey ready errorCode errorMessage order { id currentTotalPriceSet { shopMoney { amount currencyCode } } } } }`, { variables: { id: body.billingAttemptId }, signal: controller.signal });
+        query ReconcileBillingAttempt($id: ID!) { subscriptionBillingAttempt(id: $id) { id idempotencyKey originTime completedAt state { __typename ... on SubscriptionBillingAttemptSuccessState { order { id currentTotalPriceSet { shopMoney { amount currencyCode } } } } ... on SubscriptionBillingAttemptFailedState { error { __typename } } ... on SubscriptionBillingAttemptPendingState { processing } } } }`, { variables: { id: body.billingAttemptId }, signal: controller.signal });
       const payload = await response.json() as any; if (!response.ok || payload.errors?.length) return jsonError(502, "shopify_graphql_error", "Shopify reconciliation query failed", true);
       const attempt = payload.data?.subscriptionBillingAttempt; if (attempt?.idempotencyKey !== idempotencyKey) return jsonError(409, "idempotency_mismatch", "Billing attempt does not match the idempotency key");
       return Response.json(attemptEnvelope(attempt));
     }
     const response = await authenticated.admin.graphql(`#graphql
-      mutation RetryCharge($contractId: ID!, $input: SubscriptionBillingAttemptInput!) { subscriptionBillingAttemptCreate(subscriptionContractId: $contractId, subscriptionBillingAttemptInput: $input) { subscriptionBillingAttempt { id ready errorCode errorMessage order { id currentTotalPriceSet { shopMoney { amount currencyCode } } } } userErrors { field message } } }`, { variables: { contractId, input: { idempotencyKey, originTime: body.billingCycleAt } }, signal: controller.signal });
+      mutation RetryCharge($contractId: ID!, $input: SubscriptionBillingAttemptInput!) { subscriptionBillingAttemptCreate(subscriptionContractId: $contractId, subscriptionBillingAttemptInput: $input) { subscriptionBillingAttempt { id idempotencyKey originTime completedAt state { __typename ... on SubscriptionBillingAttemptSuccessState { order { id currentTotalPriceSet { shopMoney { amount currencyCode } } } } ... on SubscriptionBillingAttemptFailedState { error { __typename } } ... on SubscriptionBillingAttemptPendingState { processing } } } userErrors { field message } } }`, { variables: { contractId, input: { idempotencyKey, originTime: body.billingCycleAt, billingCycleSelector: { date: body.billingCycleAt } } }, signal: controller.signal });
     const payload = await response.json() as any; if (!response.ok || payload.errors?.length) return jsonError(502, "shopify_graphql_error", "Shopify billing mutation failed", true); const result = payload.data?.subscriptionBillingAttemptCreate;
     if (result?.userErrors?.length) return jsonError(422, "shopify_user_error", result.userErrors.map((e: any) => e.message).join("; "));
     return Response.json(attemptEnvelope(result?.subscriptionBillingAttempt));

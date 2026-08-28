@@ -59,6 +59,9 @@ function dependencies(overrides: Partial<TestDependencies> = {}) {
       deliveryPolicy: { interval: "MONTH", intervalCount: 1 },
       lines: [{ id: "gid://shopify/SubscriptionLine/1", productId: "gid://shopify/Product/1", variantId: "gid://shopify/ProductVariant/1", quantity: 1, currentPrice: { amount: "99.90", currencyCode: "BRL" }, sellingPlanId: "gid://shopify/SellingPlan/1" }],
     } }),
+    loadBillingAttempt: async () => ({ shopifyShopId: "gid://shopify/Shop/123", billingAttempt: {
+      id: "gid://shopify/SubscriptionBillingAttempt/1", idempotencyKey: "cycle-1", cycleOriginTime: "2026-09-27T16:00:00.000Z", createdAt: "2026-08-28T12:00:00.000Z", completedAt: "2026-08-28T12:00:01.000Z", state: "succeeded", contractId: "gid://shopify/SubscriptionContract/1", nextBillingAt: "2026-10-27T16:00:00.000Z", order: { id: "gid://shopify/Order/2", processedAt: "2026-08-28T12:00:01.000Z", test: true, financialStatus: "PAID", amount: "50.19", currencyCode: "BRL", subtotal: "9.00", shipping: "41.19", tax: "0.00" }, reconciliationStatus: "complete",
+    } }),
     logger: {
       error: (message, metadata) => logs.push({ message, metadata }),
       info: (message, metadata) => logs.push({ message, metadata }),
@@ -332,4 +335,29 @@ test("redelivery preserva webhook ID e event ID", async () => {
   await forward(request(), "app/uninstalled", authenticated);
   const bodies = setup.calls.map((call) => JSON.parse(String(call.init?.body)));
   assert.equal(bodies.every((body) => body.webhookId === "delivery-same" && body.shopifyEventId === "event-same"), true);
+});
+
+test("billing success forwards Shopify total including shipping and separates cycle origin from completion", async () => {
+  const setup = dependencies({ authenticateWebhook: async () => ({ shop: "known.myshopify.com", topic: "SUBSCRIPTION_BILLING_ATTEMPTS_SUCCESS", payload: { admin_graphql_api_id: "gid://shopify/SubscriptionBillingAttempt/1", admin_graphql_api_subscription_contract_id: "gid://shopify/SubscriptionContract/1" }, admin: { graphql: async () => new Response() }, triggeredAt: "2026-08-28T12:00:02.000Z" }) });
+  await createShopifyWebhookForwarder(setup.value)(request(), "subscription_billing_attempts/success");
+  const body = JSON.parse(String(setup.calls[0]?.init?.body));
+  assert.equal(body.billingAttempt.order.amount, "50.19");
+  assert.equal(body.billingAttempt.order.shipping, "41.19");
+  assert.equal(body.billingAttempt.order.currencyCode, "BRL");
+  assert.equal(body.billingAttempt.cycleOriginTime, "2026-09-27T16:00:00.000Z");
+  assert.equal(body.billingAttempt.completedAt, "2026-08-28T12:00:01.000Z");
+  assert.equal(body.triggeredAt, "2026-08-28T12:00:02.000Z");
+});
+
+test("billing enrichment failure forwards a retryable pending reconciliation without invented timestamp or secret", async () => {
+  const setup = dependencies({
+    authenticateWebhook: async () => ({ shop: "known.myshopify.com", topic: "SUBSCRIPTION_BILLING_ATTEMPTS_SUCCESS", payload: { admin_graphql_api_id: "gid://shopify/SubscriptionBillingAttempt/1", admin_graphql_api_subscription_contract_id: "gid://shopify/SubscriptionContract/1", idempotency_key: "cycle-1" }, admin: { graphql: async () => new Response() } }),
+    loadBillingAttempt: async () => { throw new Error("token super-secret-api-key"); },
+  });
+  await createShopifyWebhookForwarder(setup.value)(request(), "subscription_billing_attempts/success");
+  const body = JSON.parse(String(setup.calls[0]?.init?.body));
+  assert.equal(body.billingAttempt.reconciliationStatus, "pending");
+  assert.equal("createdAt" in body.billingAttempt, false);
+  assert.equal("order" in body.billingAttempt, false);
+  assert.equal(JSON.stringify(setup.logs).includes("super-secret-api-key"), false);
 });
