@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
+import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { authenticate } from "../shopify.server";
 import { runAdministrativeBillingReconciliationAction, ADMIN_RECONCILIATION_DRY_RUN_TARGETS } from "../lib/administrative-billing-reconciliation-route.server";
 import { BillingReconciliationDryRunForm } from "../components/billing-reconciliation-dry-run-form";
@@ -20,5 +21,9 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function BillingReconciliationRoute() {
   const data = useLoaderData<typeof loader>();
 
-  return <BillingReconciliationDryRunForm apiKey={data.apiKey} targets={data.targets} />;
+  return (
+    <AppProvider embedded apiKey={data.apiKey}>
+      <BillingReconciliationDryRunForm apiKey={data.apiKey} targets={data.targets} />
+    </AppProvider>
+  );
 }
