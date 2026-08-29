@@ -1,58 +1,30 @@
-import { useEffect, useState } from "react";
-
-export interface BillingReconciliationDryRunTarget {
-  subscriptionBillingAttemptId: string;
-  subscriptionContractId: string;
-  shopifyOrderId: string;
-  cycleOriginTime: string;
-  correlationId: string;
-}
+import { useState } from "react";
+import { useAppBridge } from "@shopify/app-bridge-react";
+import {
+  DRY_RUN_ERRORS,
+  submitBillingReconciliationDryRun,
+  type BillingReconciliationDryRunTarget,
+  type DryRunOutcome,
+} from "../lib/billing-reconciliation-dry-run";
 
 const CONFIRMATION_PHRASE = "EXECUTAR DRY-RUN SEGURO";
 
-type BridgeGlobal = { shopify: { idToken: () => Promise<string> } };
-
-interface DryRunResult {
-  status?: number;
-  body?: unknown;
-  error?: string;
-}
+const DRY_RUN_ERROR_LABELS: Record<string, string> = {
+  [DRY_RUN_ERRORS.appBridgeUnavailable]:
+    "App Bridge indisponível. Nenhum dry-run foi enviado. Feche e reabra o app no Admin.",
+  [DRY_RUN_ERRORS.requestFailed]: "Falha de rede ao enviar dry-run. Nenhuma escrita foi realizada.",
+  [DRY_RUN_ERRORS.reconciliationFailed]: "O servidor recusou o dry-run. Nenhuma escrita foi realizada.",
+};
 
 interface Props {
-  apiKey: string;
   targets: BillingReconciliationDryRunTarget;
 }
 
-function useAppBridgeIdToken(apiKey: string) {
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    if (!apiKey) return;
-    const existing = document.querySelector<HTMLScriptElement>("script[data-api-key]");
-    if (existing) {
-      setReady(true);
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://cdn.shopify.com/shopifycloud/app-bridge.js";
-    script.setAttribute("data-api-key", apiKey);
-    script.onload = () => setReady(true);
-    script.onerror = () => setReady(false);
-    document.body.appendChild(script);
-    return () => {
-      script.onload = null;
-      script.onerror = null;
-    };
-  }, [apiKey]);
-
-  return { ready, idToken: () => (window as unknown as BridgeGlobal).shopify.idToken() };
-}
-
-export function BillingReconciliationDryRunForm({ apiKey, targets }: Props) {
-  const { ready, idToken } = useAppBridgeIdToken(apiKey);
+export function BillingReconciliationDryRunForm({ targets }: Props) {
+  const shopify = useAppBridge();
   const [confirmation, setConfirmation] = useState("");
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<DryRunResult | null>(null);
+  const [result, setResult] = useState<DryRunOutcome | null>(null);
 
   const confirmed = confirmation.trim() === CONFIRMATION_PHRASE;
 
@@ -61,19 +33,15 @@ export function BillingReconciliationDryRunForm({ apiKey, targets }: Props) {
     setRunning(true);
     setResult(null);
     try {
-      const token = await idToken();
-      const response = await fetch(window.location.pathname, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ ...targets, dryRun: true }),
+      const outcome = await submitBillingReconciliationDryRun({
+        tokenProvider: () => shopify.idToken(),
+        sendRequest: (init) => fetch(window.location.pathname, init),
+        url: window.location.pathname,
+        targets,
       });
-      const body = await response.json().catch(() => null);
-      setResult({ status: response.status, body });
-    } catch (error) {
-      setResult({ error: error instanceof Error ? error.message : "unknown_error" });
+      setResult(outcome);
+    } catch {
+      setResult({ ok: false, error: DRY_RUN_ERRORS.appBridgeUnavailable });
     } finally {
       setRunning(false);
     }
@@ -122,12 +90,11 @@ export function BillingReconciliationDryRunForm({ apiKey, targets }: Props) {
       <button
         type="button"
         onClick={runDryRun}
-        disabled={!confirmed || !ready || running}
+        disabled={!confirmed || running}
         style={{ padding: "8px 16px", marginBottom: 16 }}
       >
         {running ? "Executando…" : "Executar dry-run do Billing Attempt"}
       </button>
-      {!ready && <p style={{ marginTop: 0 }}>Carregando App Bridge…</p>}
 
       {result && (
         <section
@@ -138,7 +105,9 @@ export function BillingReconciliationDryRunForm({ apiKey, targets }: Props) {
             Resultado {result.status ? `(HTTP ${result.status})` : ""}
           </h2>
           {result.error ? (
-            <p style={{ color: "#c53030" }}>{result.error}</p>
+            <p style={{ color: "#c53030" }}>
+              {result.error in DRY_RUN_ERROR_LABELS ? DRY_RUN_ERROR_LABELS[result.error] : "Falha generica no dry-run."}
+            </p>
           ) : (
             <pre style={{ overflowX: "auto", whiteSpace: "pre-wrap" }}>
               {JSON.stringify(result.body, null, 2)}
