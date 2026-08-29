@@ -23,7 +23,7 @@ export default function BillingReconciliationRoute() {
 
   return (
     <AppProvider embedded apiKey={data.apiKey}>
-      <BillingReconciliationDryRunForm apiKey={data.apiKey} targets={data.targets} />
+      <BillingReconciliationDryRunForm targets={data.targets} />
     </AppProvider>
   );
 }

@@ -28,6 +28,7 @@ test("form no longer injects or appends any script", () => {
     "document.createElement('script')",
     'document.createElement("script")',
     ".appendChild(",
+    "app-bridge.js",
   ]) {
     assert.equal(componentSource.includes(forbidden), false);
   }
@@ -39,31 +40,43 @@ test("form no longer reads the window.shopify global or uses a BridgeGlobal alia
     "window as",
     "globalThis",
     "BridgeGlobal",
+    "script[data-api-key]",
   ]) {
     assert.equal(componentSource.includes(forbidden), false);
   }
 });
 
-test("readiness is decided by the App Bridge global being callable, never by script presence", () => {
-  assert.equal(componentSource.includes("useAppBridgeScriptStatus"), true);
-  assert.equal(componentSource.includes("script[data-api-key]"), false);
-  assert.equal(componentSource.includes("probeAppBridgeReady"), true);
-  assert.equal(componentSource.includes("APP_BRIDGE_TIMEOUT_MS"), true);
-  assert.equal(componentSource.includes("maxAttempts"), true);
+test("no hook is called outside top-level component scope (no probe, effect, timer or poll)", () => {
+  for (const forbidden of [
+    "probeAppBridgeReady",
+    "useAppBridgeScriptStatus",
+    "useEffect(",
+    "setTimeout(",
+    "Math.ceil(",
+    "APP_BRIDGE_TIMEOUT_MS",
+    "APP_BRIDGE_POLL_INTERVAL_MS",
+  ]) {
+    assert.equal(componentSource.includes(forbidden), false);
+  }
 });
 
-test("form obtains the session token exclusively through useAppBridge().idToken()", () => {
+test("no rules-of-hooks suppression is used anywhere", () => {
+  for (const forbidden of ["eslint-disable", "rules-of-hooks"]) {
+    assert.equal(componentSource.includes(forbidden), false);
+  }
+});
+
+test("form obtains the session token exclusively through useAppBridge().idToken() called once at the top", () => {
   assert.equal(componentSource.includes('import { useAppBridge } from "@shopify/app-bridge-react";'), true);
   assert.equal(componentSource.includes("const shopify = useAppBridge();"), true);
+  assert.equal(componentSource.split("useAppBridge(").length - 1, 1);
   assert.equal(componentSource.includes("shopify.idToken()"), true);
   assert.equal(componentSource.includes("window.shopify.idToken"), false);
-  assert.equal(componentSource.includes("(window as"), false);
 });
 
-test("App Bridge failure surfaces a sanitized error and the POST exports always flow through the submit module", () => {
+test("App Bridge failure surfaces a sanitized error and the POST always flows through the submit module", () => {
   assert.equal(componentSource.includes("DRY_RUN_ERRORS.appBridgeUnavailable"), true);
   assert.equal(componentSource.includes("submitBillingReconciliationDryRun"), true);
-  assert.equal(componentSource.includes("App Bridge indisponível. Nenhum dry-run será enviado."), true);
   assert.equal(componentSource.includes("disabled={!confirmed || running}"), true);
 });
 

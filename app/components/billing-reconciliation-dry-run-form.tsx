@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import {
   DRY_RUN_ERRORS,
@@ -9,57 +9,6 @@ import {
 
 const CONFIRMATION_PHRASE = "EXECUTAR DRY-RUN SEGURO";
 
-const APP_BRIDGE_TIMEOUT_MS = 5000;
-const APP_BRIDGE_POLL_INTERVAL_MS = 25;
-
-type AppBridgeStatus = "loading" | "ready" | "error";
-
-function probeAppBridgeReady(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  try {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useAppBridge();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function useAppBridgeScriptStatus(apiKey: string): AppBridgeStatus {
-  const [status, setStatus] = useState<AppBridgeStatus>("loading");
-
-  useEffect(() => {
-    if (!apiKey) {
-      setStatus("error");
-      return;
-    }
-    let cancelled = false;
-    let attempts = 0;
-    const maxAttempts = Math.ceil(APP_BRIDGE_TIMEOUT_MS / APP_BRIDGE_POLL_INTERVAL_MS);
-    const poll = () => {
-      if (cancelled) return;
-      if (probeAppBridgeReady()) {
-        setStatus("ready");
-        return;
-      }
-      attempts += 1;
-      if (attempts >= maxAttempts) {
-        setStatus("error");
-        return;
-      }
-      window.setTimeout(poll, APP_BRIDGE_POLL_INTERVAL_MS);
-    };
-    poll();
-    return () => {
-      cancelled = true;
-    };
-  }, [apiKey]);
-
-  return status;
-}
-
 const DRY_RUN_ERROR_LABELS: Record<string, string> = {
   [DRY_RUN_ERRORS.appBridgeUnavailable]:
     "App Bridge indisponível. Nenhum dry-run foi enviado. Feche e reabra o app no Admin.",
@@ -68,28 +17,10 @@ const DRY_RUN_ERROR_LABELS: Record<string, string> = {
 };
 
 interface Props {
-  apiKey: string;
   targets: BillingReconciliationDryRunTarget;
 }
 
-export function BillingReconciliationDryRunForm({ apiKey, targets }: Props) {
-  const bridgeStatus = useAppBridgeScriptStatus(apiKey);
-
-  if (bridgeStatus === "loading") {
-    return <p style={{ marginTop: 0 }}>Carregando App Bridge…</p>;
-  }
-  if (bridgeStatus === "error") {
-    return (
-      <p style={{ color: "#c53030", marginTop: 0 }}>
-        App Bridge indisponível. Nenhum dry-run será enviado.
-      </p>
-    );
-  }
-
-  return <BillingReconciliationDryRunPanel targets={targets} />;
-}
-
-function BillingReconciliationDryRunPanel({ targets }: { targets: BillingReconciliationDryRunTarget }) {
+export function BillingReconciliationDryRunForm({ targets }: Props) {
   const shopify = useAppBridge();
   const [confirmation, setConfirmation] = useState("");
   const [running, setRunning] = useState(false);
