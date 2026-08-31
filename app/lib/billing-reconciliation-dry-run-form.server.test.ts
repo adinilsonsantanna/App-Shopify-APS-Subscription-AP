@@ -88,9 +88,14 @@ test("client contract keeps dryRun true and never references the false path", ()
   assert.equal(submitSource.includes("dryRun: true"), true);
 });
 
-test("form posts to a URL constructed with an allowlist of params, not window.location.href", () => {
-  assert.equal(componentSource.includes("new URL(window.location.pathname, window.location.origin)"), true);
-  assert.equal(componentSource.includes("allowed = [\"shop\", \"host\", \"embedded\"]"), true);
+test("form posts to a URL constructed by the shared safe URL helper, not window.location.href", () => {
+  assert.equal(
+    componentSource.includes(
+      'import { buildBillingReconciliationSafeUrl } from "../lib/billing-reconciliation-safe-url";',
+    ),
+    true,
+  );
+  assert.equal(componentSource.includes("buildBillingReconciliationSafeUrl("), true);
   assert.equal(componentSource.includes("fetch(safeUrlString, init)"), true);
   assert.equal(componentSource.includes("window.location.href"), false);
 });

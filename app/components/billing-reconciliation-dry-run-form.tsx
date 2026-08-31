@@ -6,6 +6,7 @@ import {
   type BillingReconciliationDryRunTarget,
   type DryRunOutcome,
 } from "../lib/billing-reconciliation-dry-run";
+import { buildBillingReconciliationSafeUrl } from "../lib/billing-reconciliation-safe-url";
 
 const CONFIRMATION_PHRASE = "EXECUTAR DRY-RUN SEGURO";
 
@@ -32,14 +33,6 @@ export function BillingReconciliationDryRunForm({ targets }: Props) {
     if (!confirmed || running) return;
     setRunning(true);
     setResult(null);
-import { buildBillingReconciliationSafeUrl } from "../lib/billing-reconciliation-safe-url";
-
-/* Lines 23-35 omitted */
-
-  async function runDryRun() {
-    if (!confirmed || running) return;
-    setRunning(true);
-    setResult(null);
     const safeUrlString = buildBillingReconciliationSafeUrl(
       window.location.origin,
       window.location.pathname,
@@ -54,13 +47,6 @@ import { buildBillingReconciliationSafeUrl } from "../lib/billing-reconciliation
         targets,
       });
       setResult(outcome);
-    } catch {
-      setResult({ ok: false, error: DRY_RUN_ERRORS.appBridgeUnavailable });
-    } finally {
-      setRunning(false);
-    }
-  }
-
     } catch {
       setResult({ ok: false, error: DRY_RUN_ERRORS.appBridgeUnavailable });
     } finally {
