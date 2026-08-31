@@ -32,15 +32,19 @@ export function BillingReconciliationDryRunForm({ targets }: Props) {
     if (!confirmed || running) return;
     setRunning(true);
     setResult(null);
-    const safeUrl = new URL(window.location.pathname, window.location.origin);
-    const params = new URLSearchParams(window.location.search);
-    const allowed = ["shop", "host", "embedded"];
-    for (const [key, value] of params.entries()) {
-      if (allowed.includes(key)) {
-        safeUrl.searchParams.append(key, value);
-      }
-    }
-    const safeUrlString = safeUrl.toString();
+import { buildBillingReconciliationSafeUrl } from "../lib/billing-reconciliation-safe-url";
+
+/* Lines 23-35 omitted */
+
+  async function runDryRun() {
+    if (!confirmed || running) return;
+    setRunning(true);
+    setResult(null);
+    const safeUrlString = buildBillingReconciliationSafeUrl(
+      window.location.origin,
+      window.location.pathname,
+      window.location.search
+    );
 
     try {
       const outcome = await submitBillingReconciliationDryRun({
@@ -50,6 +54,13 @@ export function BillingReconciliationDryRunForm({ targets }: Props) {
         targets,
       });
       setResult(outcome);
+    } catch {
+      setResult({ ok: false, error: DRY_RUN_ERRORS.appBridgeUnavailable });
+    } finally {
+      setRunning(false);
+    }
+  }
+
     } catch {
       setResult({ ok: false, error: DRY_RUN_ERRORS.appBridgeUnavailable });
     } finally {
