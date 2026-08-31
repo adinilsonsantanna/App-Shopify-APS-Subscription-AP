@@ -88,10 +88,11 @@ test("client contract keeps dryRun true and never references the false path", ()
   assert.equal(submitSource.includes("dryRun: true"), true);
 });
 
-test("form posts to the full current URL to preserve embedded context, not the bare pathname", () => {
-  assert.equal(componentSource.includes("fetch(window.location.href, init)"), true);
-  assert.equal(componentSource.includes("window.location.pathname"), false);
-  assert.equal(componentSource.split("window.location.href").length >= 2, true);
+test("form posts to a URL constructed with an allowlist of params, not window.location.href", () => {
+  assert.equal(componentSource.includes("new URL(window.location.pathname, window.location.origin)"), true);
+  assert.equal(componentSource.includes("allowed = [\"shop\", \"host\", \"embedded\"]"), true);
+  assert.equal(componentSource.includes("fetch(safeUrlString, init)"), true);
+  assert.equal(componentSource.includes("window.location.href"), false);
 });
 
 test("non-2xx result surfaces HTTP status, sanitized body.error and body.requestId without dumping payload", () => {

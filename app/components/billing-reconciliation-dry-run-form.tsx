@@ -32,11 +32,21 @@ export function BillingReconciliationDryRunForm({ targets }: Props) {
     if (!confirmed || running) return;
     setRunning(true);
     setResult(null);
+    const safeUrl = new URL(window.location.pathname, window.location.origin);
+    const params = new URLSearchParams(window.location.search);
+    const allowed = ["shop", "host", "embedded"];
+    for (const [key, value] of params.entries()) {
+      if (allowed.includes(key)) {
+        safeUrl.searchParams.append(key, value);
+      }
+    }
+    const safeUrlString = safeUrl.toString();
+
     try {
       const outcome = await submitBillingReconciliationDryRun({
         tokenProvider: () => shopify.idToken(),
-        sendRequest: (init) => fetch(window.location.href, init),
-        url: window.location.href,
+        sendRequest: (init) => fetch(safeUrlString, init),
+        url: safeUrlString,
         targets,
       });
       setResult(outcome);
