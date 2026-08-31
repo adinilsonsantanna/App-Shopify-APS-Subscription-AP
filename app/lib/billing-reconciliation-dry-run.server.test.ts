@@ -58,6 +58,20 @@ test("Authorization header uses the exact token returned by idToken", async () =
   assert.equal(headers["content-type"], "application/json");
 });
 
+test("Authorization Bearer is always sent even when the url carries no query params", async () => {
+  const s = setup({ token: "tkn-noquery" });
+  const outcome = await submitBillingReconciliationDryRun({ ...s.dependencies, url: "/app/billing-reconciliation" });
+  assert.equal(outcome.ok, true);
+  const headers = s.requestInits[0].headers as Record<string, string>;
+  assert.equal(headers.authorization, "Bearer tkn-noquery");
+});
+
+test("request init always enforces same-origin credentials so app-bridge context is preserved", async () => {
+  const s = setup();
+  await submitBillingReconciliationDryRun(s.dependencies);
+  assert.equal((s.requestInits[0].credentials), "same-origin");
+});
+
 test("POST body always contains dryRun true and all fixed targets", async () => {
   const s = setup();
   const outcome = await submitBillingReconciliationDryRun(s.dependencies);

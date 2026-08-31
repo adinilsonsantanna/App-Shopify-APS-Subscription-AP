@@ -43,6 +43,7 @@ export async function submitBillingReconciliationDryRun(
   try {
     response = await dependencies.sendRequest({
       method: "POST",
+      credentials: "same-origin",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${token}`,

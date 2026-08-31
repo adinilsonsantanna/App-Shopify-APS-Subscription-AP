@@ -14,7 +14,7 @@ export interface AdministrativeReconciliationRouteDependencies {
   loadAuthenticate(): Promise<AdminReconciliationDependencies["authenticate"]>;
   loadHandler(): Promise<Handler>;
   fetchFn: typeof fetch;
-  logger: Pick<Console, "error">;
+  logger: Pick<Console, "error" | "info">;
   requestId(): string;
   apiUrl?: string;
   apiKey?: string;

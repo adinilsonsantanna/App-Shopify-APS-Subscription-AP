@@ -35,8 +35,8 @@ export function BillingReconciliationDryRunForm({ targets }: Props) {
     try {
       const outcome = await submitBillingReconciliationDryRun({
         tokenProvider: () => shopify.idToken(),
-        sendRequest: (init) => fetch(window.location.pathname, init),
-        url: window.location.pathname,
+        sendRequest: (init) => fetch(window.location.href, init),
+        url: window.location.href,
         targets,
       });
       setResult(outcome);
@@ -53,6 +53,13 @@ export function BillingReconciliationDryRunForm({ targets }: Props) {
       <code className="aps-recon-code">{value}</code>
     </div>
   );
+
+  const bodyRecord =
+    result && result.body && typeof result.body === "object" && !Array.isArray(result.body)
+      ? (result.body as Record<string, unknown>)
+      : null;
+  const bodyError = typeof bodyRecord?.error === "string" ? bodyRecord.error : undefined;
+  const bodyRequestId = typeof bodyRecord?.requestId === "string" ? bodyRecord.requestId : undefined;
 
   return (
     <main
@@ -105,9 +112,26 @@ export function BillingReconciliationDryRunForm({ targets }: Props) {
             Resultado {result.status ? `(HTTP ${result.status})` : ""}
           </h2>
           {result.error ? (
-            <p style={{ color: "#c53030" }}>
-              {result.error in DRY_RUN_ERROR_LABELS ? DRY_RUN_ERROR_LABELS[result.error] : "Falha generica no dry-run."}
-            </p>
+            <div style={{ color: "#c53030" }}>
+              <p>
+                {result.error in DRY_RUN_ERROR_LABELS ? DRY_RUN_ERROR_LABELS[result.error] : "Falha generica no dry-run."}
+              </p>
+              {result.status ? (
+                <p>
+                  <strong>HTTP {result.status}</strong>
+                </p>
+              ) : null}
+              {bodyError ? (
+                <p>
+                  <strong>Código:</strong> <code>{bodyError}</code>
+                </p>
+              ) : null}
+              {bodyRequestId ? (
+                <p>
+                  <strong>requestId:</strong> <code>{bodyRequestId}</code>
+                </p>
+              ) : null}
+            </div>
           ) : (
             <pre style={{ overflowX: "auto", whiteSpace: "pre-wrap" }}>
               {JSON.stringify(result.body, null, 2)}
