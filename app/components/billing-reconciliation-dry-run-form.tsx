@@ -35,7 +35,7 @@ export function BillingReconciliationDryRunForm({ targets }: Props) {
     setResult(null);
     const safeUrlString = buildBillingReconciliationSafeUrl(
       window.location.origin,
-      window.location.pathname,
+      "/app/billing-reconciliation/execute",
       window.location.search
     );
 

@@ -6,6 +6,27 @@ import { fileURLToPath } from "node:url";
 const componentSource = readFileSync(fileURLToPath(new URL("../components/billing-reconciliation-dry-run-form.tsx", import.meta.url)), "utf8");
 const routeSource = readFileSync(fileURLToPath(new URL("../routes/app_.billing-reconciliation.tsx", import.meta.url)), "utf8");
 const submitSource = readFileSync(fileURLToPath(new URL("./billing-reconciliation-dry-run.ts", import.meta.url)), "utf8");
+const resourceRouteSource = readFileSync(fileURLToPath(new URL("../routes/app_.billing-reconciliation_.execute.tsx", import.meta.url)), "utf8");
+
+test("UI route has no operational reconciliation action anymore", () => {
+  assert.equal(/export\s+async\s+function\s+action/.test(routeSource), false);
+  assert.equal(routeSource.includes("runAdministrativeBillingReconciliation"), false);
+  assert.equal(routeSource.includes("ActionFunctionArgs"), false);
+});
+
+test("resource route owns the reconciliation action while the UI route renders only", () => {
+  assert.match(resourceRouteSource, /export\s+async\s+function\s+action/);
+  assert.equal(/export\s+async\s+function\s+loader/.test(resourceRouteSource), false);
+  assert.equal(/export\s+default/.test(resourceRouteSource), false);
+  assert.equal(routeSource.includes("authenticate.admin"), true);
+  assert.equal(routeSource.split("authenticate.admin").length - 1, 1);
+});
+
+test("form posts to the dedicated resource route path", () => {
+  assert.equal(componentSource.includes('"/app/billing-reconciliation/execute"'), true);
+  assert.equal(componentSource.includes("fetch(safeUrlString, init)"), true);
+});
+
 
 test("route stays a root-level page (parentId=root) and does not reload the authentication layout", () => {
   assert.equal(routeSource.includes("parentId"), false);

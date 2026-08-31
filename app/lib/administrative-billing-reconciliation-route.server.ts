@@ -10,6 +10,8 @@ export const ADMIN_RECONCILIATION_DRY_RUN_TARGETS = {
   correlationId: "scope9-live-20260826144821-a2c3d40d",
 } as const;
 
+export const ADMINISTRATIVE_RECONCILIATION_RESOURCE_PATH = "/app/billing-reconciliation/execute";
+
 export interface AdministrativeReconciliationRouteDependencies {
   loadAuthenticate(): Promise<AdminReconciliationDependencies["authenticate"]>;
   loadHandler(): Promise<Handler>;
@@ -26,7 +28,7 @@ function safeErrorClass(error: unknown) {
 }
 
 function logFailure(logger: Pick<Console, "error">, event: string, requestId: string, error: unknown) {
-  logger.error(JSON.stringify({ event, route: "/app/billing-reconciliation", requestId, errorClass: safeErrorClass(error) }));
+  logger.error(JSON.stringify({ event, route: ADMINISTRATIVE_RECONCILIATION_RESOURCE_PATH, requestId, errorClass: safeErrorClass(error) }));
 }
 
 function jsonError(status: number, error: string, requestId: string) {
@@ -49,16 +51,23 @@ const defaults: AdministrativeReconciliationRouteDependencies = {
   apiKey: process.env.API_KEY,
 };
 
-export async function runAdministrativeBillingReconciliationAction(
+export async function runAdministrativeBillingReconciliationResourceAction(
   request: Request,
   dependencies: AdministrativeReconciliationRouteDependencies = defaults,
 ) {
   const requestId = dependencies.requestId();
+  dependencies.logger.info(JSON.stringify({ event: "resource_action_started", route: ADMINISTRATIVE_RECONCILIATION_RESOURCE_PATH, requestId, stage: "started" }));
+
+  if (request.method !== "POST") {
+    dependencies.logger.error(JSON.stringify({ event: "resource_action_failed", route: ADMINISTRATIVE_RECONCILIATION_RESOURCE_PATH, requestId, stage: "method_rejected" }));
+    return jsonError(400, "method_not_allowed", requestId);
+  }
+
   let authenticate: AdminReconciliationDependencies["authenticate"];
   try {
     authenticate = await dependencies.loadAuthenticate();
   } catch (error) {
-    logFailure(dependencies.logger, "administrative_reconciliation.shopify_initialization_failed", requestId, error);
+    logFailure(dependencies.logger, "resource_action_failed", requestId, error);
     return jsonError(503, "app_infrastructure_unavailable", requestId);
   }
 
@@ -66,12 +75,12 @@ export async function runAdministrativeBillingReconciliationAction(
   try {
     handler = await dependencies.loadHandler();
   } catch (error) {
-    logFailure(dependencies.logger, "administrative_reconciliation.route_dependency_failed", requestId, error);
+    logFailure(dependencies.logger, "resource_action_failed", requestId, error);
     return jsonError(500, "route_initialization_failed", requestId);
   }
 
   try {
-    return await handler(request, {
+    const response = await handler(request, {
       authenticate,
       fetchFn: dependencies.fetchFn,
       apiUrl: dependencies.apiUrl,
@@ -80,8 +89,13 @@ export async function runAdministrativeBillingReconciliationAction(
       requestId,
       allowedTargets: dependencies.allowedTargets ?? ADMIN_RECONCILIATION_DRY_RUN_TARGETS,
     });
+    if (!/application\/json/i.test(response.headers.get("content-type") || "")) {
+      logFailure(dependencies.logger, "resource_action_failed", requestId, new Error("non_json_response"));
+      return jsonError(500, "administrative_reconciliation_unhandled", requestId);
+    }
+    return response;
   } catch (error) {
-    logFailure(dependencies.logger, "administrative_reconciliation.unhandled_failure", requestId, error);
+    logFailure(dependencies.logger, "resource_action_failed", requestId, error);
     return jsonError(500, "administrative_reconciliation_unhandled", requestId);
   }
 }

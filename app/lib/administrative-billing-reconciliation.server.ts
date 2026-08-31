@@ -16,6 +16,8 @@ export type AdminReconciliationDependencies = {
   };
 };
 
+const ADMINISTRATIVE_RECONCILIATION_RESOURCE_PATH = "/app/billing-reconciliation/execute";
+
 export const ADMINISTRATIVE_RECONCILIATION_QUERY = `#graphql
 query AdministrativeBillingReconciliation($attemptId: ID!) {
   shop { id }
@@ -69,6 +71,7 @@ export async function handleAdministrativeBillingReconciliation(request: Request
   logAuthenticationMetadata(dependencies, request);
   if (request.method !== "POST") return jsonError(405, "method_not_allowed", dependencies.requestId);
   let authenticated: Authenticated;
+  dependencies.logger.info(JSON.stringify({ event: "authentication_started", route: ADMINISTRATIVE_RECONCILIATION_RESOURCE_PATH, requestId: dependencies.requestId, stage: "authenticating" }));
   try {
     authenticated = await dependencies.authenticate(request);
   } catch (error) {
@@ -79,6 +82,7 @@ export async function handleAdministrativeBillingReconciliation(request: Request
     logFailure(dependencies, "administrative_reconciliation.authentication_failed", error);
     return jsonError(503, "shopify_authentication_unavailable", dependencies.requestId);
   }
+  dependencies.logger.info(JSON.stringify({ event: "authentication_completed", route: ADMINISTRATIVE_RECONCILIATION_RESOURCE_PATH, requestId: dependencies.requestId, stage: "authenticated", shop: authenticated.session.shop }));
   let input: Record<string, unknown>;
   try { input = object(await request.json()); } catch { return jsonError(400, "invalid_json", dependencies.requestId); }
   const attemptId = input.subscriptionBillingAttemptId, expectedContractId = input.subscriptionContractId, expectedOrderId = input.shopifyOrderId, expectedCycle = input.cycleOriginTime, correlationId = input.correlationId;
@@ -88,6 +92,7 @@ export async function handleAdministrativeBillingReconciliation(request: Request
   if (!dependencies.apiUrl) return jsonError(503, "api_subscription_url_missing", dependencies.requestId);
   if (!dependencies.apiKey) return jsonError(503, "api_key_missing", dependencies.requestId);
   try {
+    dependencies.logger.info(JSON.stringify({ event: "shopify_read_started", route: ADMINISTRATIVE_RECONCILIATION_RESOURCE_PATH, requestId: dependencies.requestId, stage: "reading_shopify" }));
     const response = await authenticated.admin.graphql(ADMINISTRATIVE_RECONCILIATION_QUERY, { variables: { attemptId } });
     const body = object(await response.json());
     if (!response.ok || body.errors?.length) return jsonError(502, "shopify_query_failed", dependencies.requestId);
@@ -97,8 +102,11 @@ export async function handleAdministrativeBillingReconciliation(request: Request
     if (!transactions.some((transaction: any) => transaction?.gateway === "bogus" && transaction?.test === true && transaction?.status === "SUCCESS")) return jsonError(409, "shopify_test_gateway_mismatch", dependencies.requestId);
     const completedAt = string(attempt.completedAt), amount = string(money.amount), currencyCode = string(money.currencyCode);
     if (!completedAt || !amount || !currencyCode) return jsonError(409, "shopify_reconciliation_incomplete", dependencies.requestId);
+    dependencies.logger.info(JSON.stringify({ event: "shopify_read_completed", route: ADMINISTRATIVE_RECONCILIATION_RESOURCE_PATH, requestId: dependencies.requestId, stage: "shopify_read_done", shop: authenticated.session.shop }));
     const apiUrl = dependencies.apiUrl.replace(/\/$/, "");
+    dependencies.logger.info(JSON.stringify({ event: "central_dry_run_started", route: ADMINISTRATIVE_RECONCILIATION_RESOURCE_PATH, requestId: dependencies.requestId, stage: "calling_central" }));
     const central = await dependencies.fetchFn(`${apiUrl}/api/administrative-reconciliation/billing-attempt`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": dependencies.apiKey }, body: JSON.stringify({ shopDomain: authenticated.session.shop.toLowerCase(), shopId: shop.id, subscriptionContractId: contract.id, subscriptionBillingAttemptId: attempt.id, shopifyOrderId: order.id, cycleOriginTime: attempt.originTime, status: "succeeded", amount, currencyCode, attemptedAt: completedAt, completedAt, test: true, gateway: "bogus", correlationId, dryRun: true }) });
+    dependencies.logger.info(JSON.stringify({ event: "central_dry_run_completed", route: ADMINISTRATIVE_RECONCILIATION_RESOURCE_PATH, requestId: dependencies.requestId, stage: "central_done", status: central.status }));
     let result: unknown;
     try { result = await central.json(); } catch (error) { logFailure(dependencies, "administrative_reconciliation.central_api_invalid_json", error, authenticated.session.shop); return jsonError(502, "central_api_invalid_response", dependencies.requestId); }
     return Response.json(result, { status: central.status });

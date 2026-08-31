@@ -30,3 +30,30 @@ test("authentication 401 throw stays sanitized JSON 401, never HTML or 500", asy
 test("query params alone cannot authenticate when no Bearer session exists", async () => { const s = setup({ authenticate: async (req: Request) => { const auth = req.headers.get("authorization") ?? ""; if (!/^Bearer\s+/i.test(auth)) throw new Response("no session", { status: 401 }); return { session: { shop: "one.myshopify.com" }, admin: { graphql: async () => Response.json({}) } }; } }); const response = await handleAdministrativeBillingReconciliation(request(target, "https://app.test/app/billing-reconciliation?embedded=1&shop=aps-test-store-hx3rwtgw.myshopify.com&host=YWhvb3N0Lm15c2hvcGlmeS5jb20&id_token=forged"), s.dependencies); assert.equal(response.status, 401); assert.deepEqual(await (response as any).json(), { error: "shopify_authentication_required", requestId: "req-test-123" }); assert.equal(s.graphqlCalls, 0); assert.equal(s.centralBodies.length, 0); });
 test("authentication metadata logs only booleans and pathname, never token, query or secret", async () => { const infoLines: string[] = []; const s = setup({ authenticate: async () => { throw new Response("unauthorized", { status: 401 }); }, logger: { error: (...args: any[]) => {}, info: (msg: string) => infoLines.push(String(msg)) } }); const req = new Request("https://app.test/app/billing-reconciliation?embedded=1&shop=aps-test-store-hx3rwtgw.myshopify.com&host=YWhvc3Q", { method: "POST", headers: { authorization: "Bearer tkn-super-secret" }, body: JSON.stringify(target) }); const response = await handleAdministrativeBillingReconciliation(req, s.dependencies); assert.equal(response.status, 401); const meta = JSON.parse(infoLines[0]); assert.equal(meta.event, "administrative_reconciliation.authentication_metadata"); assert.equal(meta.requestId, "req-test-123"); assert.equal(meta.hasAuthorization, true); assert.equal(meta.authorizationSchemeBearer, true); assert.equal(meta.hasShopParam, true); assert.equal(meta.hasHostParam, true); assert.equal(meta.hasEmbeddedParam, true); assert.equal(meta.pathname, "/app/billing-reconciliation"); const serialized = JSON.stringify(infoLines); assert.equal(serialized.includes("tkn-super-secret"), false); assert.equal(serialized.includes("aps-test-store"), false); assert.equal(serialized.includes("YWhvc3Q"), false); });
 test("bare-path POST without embedded/query context logs hasShopParam false (documented diagnosis)", async () => { const infoLines: string[] = []; const s = setup({ authenticate: async () => { throw new Response("unauthorized", { status: 401 }); }, logger: { error: (...args: any[]) => {}, info: (msg: string) => infoLines.push(String(msg)) } }); await handleAdministrativeBillingReconciliation(new Request("https://app.test/app/billing-reconciliation", { method: "POST", body: JSON.stringify(target) }), s.dependencies); const meta = JSON.parse(infoLines[0]); assert.equal(meta.hasShopParam, false); assert.equal(meta.hasHostParam, false); assert.equal(meta.hasEmbeddedParam, false); assert.equal(meta.pathname, "/app/billing-reconciliation"); assert.equal(meta.hasAuthorization, false); assert.equal(meta.authorizationSchemeBearer, false); });
+test("observability stage events emit only requestId, stage, status and authorized identifiers", async () => {
+  const infoLines: string[] = [];
+  const s = setup({ logger: { error: (...args: any[]) => s.logs.push(args), info: (msg: string) => infoLines.push(String(msg)) } });
+  await handleAdministrativeBillingReconciliation(request(), s.dependencies);
+  const events = infoLines.map((line) => JSON.parse(line));
+  const names = events.map((e) => e.event);
+  for (const expected of ["authentication_started", "authentication_completed", "shopify_read_started", "shopify_read_completed", "central_dry_run_started", "central_dry_run_completed"]) {
+    assert.equal(names.includes(expected), true);
+  }
+  const stageEvents = events.filter((e) => typeof e.event === "string" && e.event !== "administrative_reconciliation.authentication_metadata");
+  for (const e of stageEvents) {
+    if (e.event === "authentication_completed" || e.event === "shopify_read_completed") {
+      assert.deepEqual(Object.keys(e).sort(), ["event", "requestId", "route", "shop", "stage"].sort());
+      assert.equal(e.shop, "one.myshopify.com");
+      continue;
+    }
+    if (e.event === "central_dry_run_completed") {
+      assert.deepEqual(Object.keys(e).sort(), ["event", "requestId", "route", "stage", "status"].sort());
+      assert.equal(e.stage, "central_done");
+      assert.equal(e.status, 200);
+      continue;
+    }
+    assert.deepEqual(Object.keys(e).sort(), ["event", "requestId", "route", "stage"].sort());
+  }
+  assert.equal(JSON.stringify(events).includes("never-forward"), false);
+  assert.equal(JSON.stringify(events).includes("central-secret"), false);
+});
