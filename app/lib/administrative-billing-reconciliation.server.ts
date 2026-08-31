@@ -5,7 +5,7 @@ export type AdminReconciliationDependencies = {
   fetchFn: typeof fetch;
   apiUrl?: string;
   apiKey?: string;
-  logger: Pick<Console, "error">;
+  logger: Pick<Console, "error" | "info">;
   requestId: string;
   allowedTargets?: {
     subscriptionBillingAttemptId: string;
@@ -44,13 +44,38 @@ function logFailure(dependencies: AdminReconciliationDependencies, event: string
   dependencies.logger.error(JSON.stringify({ event, route: "/app/billing-reconciliation", requestId: dependencies.requestId, errorClass: errorClass(error), ...(shop ? { shop } : {}) }));
 }
 
+function logAuthenticationMetadata(dependencies: AdminReconciliationDependencies, request: Request) {
+  const url = new URL(request.url);
+  const authorization = request.headers.get("authorization") ?? "";
+  const hasAuthorization = authorization.length > 0;
+  const authorizationSchemeBearer = /^Bearer\s+/i.test(authorization);
+  const hasShopParam = url.searchParams.has("shop");
+  const hasHostParam = url.searchParams.has("host");
+  const hasEmbeddedParam = url.searchParams.has("embedded");
+  dependencies.logger.info(JSON.stringify({
+    event: "administrative_reconciliation.authentication_metadata",
+    route: "/app/billing-reconciliation",
+    requestId: dependencies.requestId,
+    hasAuthorization,
+    authorizationSchemeBearer,
+    hasShopParam,
+    hasHostParam,
+    hasEmbeddedParam,
+    pathname: url.pathname,
+  }));
+}
+
 export async function handleAdministrativeBillingReconciliation(request: Request, dependencies: AdminReconciliationDependencies) {
+  logAuthenticationMetadata(dependencies, request);
   if (request.method !== "POST") return jsonError(405, "method_not_allowed", dependencies.requestId);
   let authenticated: Authenticated;
   try {
     authenticated = await dependencies.authenticate(request);
   } catch (error) {
-    if (error instanceof Response) return jsonError(401, "shopify_authentication_required", dependencies.requestId);
+    if (error instanceof Response) {
+      const status = Number.isInteger(error.status) && error.status >= 400 && error.status < 600 ? error.status : 401;
+      return jsonError(status, "shopify_authentication_required", dependencies.requestId);
+    }
     logFailure(dependencies, "administrative_reconciliation.authentication_failed", error);
     return jsonError(503, "shopify_authentication_unavailable", dependencies.requestId);
   }

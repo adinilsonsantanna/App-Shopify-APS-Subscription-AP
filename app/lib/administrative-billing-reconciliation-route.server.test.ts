@@ -11,7 +11,7 @@ function dependencies(overrides: Partial<AdministrativeReconciliationRouteDepend
       loadAuthenticate: async () => async () => { throw new Response("unauthorized", { status: 401 }); },
       loadHandler: async () => async () => Response.json({ ok: true }),
       fetchFn: fetch,
-      logger: { error: (message: string) => logs.push(message) },
+      logger: { error: (message: string) => logs.push(message), info: () => {} },
       requestId: () => "route-req-123",
       apiUrl: "https://central.test",
       apiKey: "central-secret",
@@ -55,4 +55,21 @@ test("default route allowlist pins the authorized dry-run targets", () => {
     cycleOriginTime: "2026-09-27T16:00:00Z",
     correlationId: "scope9-live-20260826144821-a2c3d40d",
   });
+});
+
+test("requestId is generated before authenticate.admin and the auth 401 stays JSON, never 500/HTML", async () => {
+  const { handleAdministrativeBillingReconciliation } = await import("./administrative-billing-reconciliation.server");
+  const logs: string[] = [];
+  let authenticateCalls = 0;
+  const setup = dependencies({
+    loadAuthenticate: async () => async () => { authenticateCalls++; throw new Response("login", { status: 401 }); },
+    loadHandler: async () => handleAdministrativeBillingReconciliation,
+    requestId: () => "pre-auth-route-999",
+    logger: { error: (message: string) => logs.push(message), info: () => {} },
+  });
+  const response = await runAdministrativeBillingReconciliationAction(request(), setup.value);
+  assert.equal(authenticateCalls, 1);
+  assert.equal(response.status, 401);
+  assert.match(response.headers.get("content-type") || "", /application\/json/);
+  assert.deepEqual(await response.json(), { error: "shopify_authentication_required", requestId: "pre-auth-route-999" });
 });

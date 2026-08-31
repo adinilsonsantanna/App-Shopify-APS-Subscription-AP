@@ -88,6 +88,25 @@ test("client contract keeps dryRun true and never references the false path", ()
   assert.equal(submitSource.includes("dryRun: true"), true);
 });
 
+test("form posts to a URL constructed by the shared safe URL helper, not window.location.href", () => {
+  assert.equal(
+    componentSource.includes(
+      'import { buildBillingReconciliationSafeUrl } from "../lib/billing-reconciliation-safe-url";',
+    ),
+    true,
+  );
+  assert.equal(componentSource.includes("buildBillingReconciliationSafeUrl("), true);
+  assert.equal(componentSource.includes("fetch(safeUrlString, init)"), true);
+  assert.equal(componentSource.includes("window.location.href"), false);
+});
+
+test("non-2xx result surfaces HTTP status, sanitized body.error and body.requestId without dumping payload", () => {
+  assert.equal(componentSource.includes("HTTP {result.status}"), true);
+  assert.equal(componentSource.includes("bodyError"), true);
+  assert.equal(componentSource.includes("bodyRequestId"), true);
+  assert.equal(componentSource.includes("JSON.stringify(result.body"), true);
+});
+
 test("client form and route never carry server secrets; only the public apiKey env is read", () => {
   for (const source of [componentSource, routeSource]) {
     assert.equal(source.includes("SHOPIFY_API_SECRET"), false);
