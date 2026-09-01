@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LIVE_ERRORS, submitBillingReconciliationLive, type BillingReconciliationLiveDependencies } from "./billing-reconciliation-live";
+import { LIVE_ERRORS, runWithInFlightLock, submitBillingReconciliationLive, type BillingReconciliationLiveDependencies } from "./billing-reconciliation-live";
 
 const target = { subscriptionContractId: "gid://shopify/SubscriptionContract/10", subscriptionBillingAttemptId: "gid://shopify/SubscriptionBillingAttempt/20", shopifyOrderId: "gid://shopify/Order/30", cycleOriginTime: "2026-09-27T16:00:00Z", correlationId: "scope9-live-cycle" };
 
@@ -27,6 +27,24 @@ test("live submit sends exactly one request with confirmation and no dryRun flag
   assert.equal(body.confirmation, "EXECUTAR RECONCILIAÇÃO LIVE");
   assert.equal("dryRun" in body, false);
   assert.equal(body.subscriptionBillingAttemptId, target.subscriptionBillingAttemptId);
+});
+
+test("synchronous in-flight lock rejects a second same-tick submission", async () => {
+  let releaseToken!: (value: string) => void;
+  const token = new Promise<string>((resolve) => { releaseToken = resolve; });
+  let tokenCalls = 0;
+  const s = setup({ tokenProvider: async () => { tokenCalls += 1; return token; } });
+  const lock = { current: false };
+  const first = runWithInFlightLock(lock, () => submitBillingReconciliationLive(s.deps));
+  const second = runWithInFlightLock(lock, () => submitBillingReconciliationLive(s.deps));
+  assert.equal(lock.current, true);
+  assert.equal(tokenCalls, 1);
+  assert.equal(await second, undefined);
+  assert.equal(s.sent.length, 0);
+  releaseToken("token-abc");
+  assert.equal((await first)?.ok, true);
+  assert.equal(s.sent.length, 1);
+  assert.equal(lock.current, false);
 });
 
 test("live submit sends bearer token and same-origin credentials", async () => {

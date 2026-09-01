@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import {
   LIVE_ERRORS,
   ADMIN_LIVE_CONFIRMATION_PHRASE,
+  runWithInFlightLock,
   submitBillingReconciliationLive,
   type BillingReconciliationLiveTarget,
   type LiveOutcome,
@@ -28,33 +29,36 @@ export function BillingReconciliationLiveForm({ liveEnabled, target }: Props) {
   const [confirmation, setConfirmation] = useState("");
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<LiveOutcome | null>(null);
+  const inFlightRef = useRef(false);
 
-  const confirmed = confirmation.trim() === ADMIN_LIVE_CONFIRMATION_PHRASE;
+  const confirmed = confirmation === ADMIN_LIVE_CONFIRMATION_PHRASE;
 
   async function runLive() {
-    if (!confirmed || running || !target) return;
-    setRunning(true);
-    setResult(null);
-    const safeUrlString = buildBillingReconciliationSafeUrl(
-      window.location.origin,
-      "/app/billing-reconciliation/execute-live",
-      window.location.search
-    );
+    if (!confirmed || !target) return;
+    await runWithInFlightLock(inFlightRef, async () => {
+      setRunning(true);
+      setResult(null);
+      const safeUrlString = buildBillingReconciliationSafeUrl(
+        window.location.origin,
+        "/app/billing-reconciliation/execute-live",
+        window.location.search
+      );
 
-    try {
-      const outcome = await submitBillingReconciliationLive({
-        tokenProvider: () => shopify.idToken(),
-        sendRequest: (init) => fetch(safeUrlString, init),
-        url: safeUrlString,
-        target,
-        confirmation,
-      });
-      setResult(outcome);
-    } catch {
-      setResult({ ok: false, error: LIVE_ERRORS.appBridgeUnavailable });
-    } finally {
-      setRunning(false);
-    }
+      try {
+        const outcome = await submitBillingReconciliationLive({
+          tokenProvider: () => shopify.idToken(),
+          sendRequest: (init) => fetch(safeUrlString, init),
+          url: safeUrlString,
+          target,
+          confirmation,
+        });
+        setResult(outcome);
+      } catch {
+        setResult({ ok: false, error: LIVE_ERRORS.appBridgeUnavailable });
+      } finally {
+        setRunning(false);
+      }
+    });
   }
 
   const field = (label: string, value: string) => (

@@ -8,6 +8,18 @@ export interface BillingReconciliationLiveTarget {
 
 export const ADMIN_LIVE_CONFIRMATION_PHRASE = "EXECUTAR RECONCILIAÇÃO LIVE";
 
+export type InFlightLock = { current: boolean };
+
+export async function runWithInFlightLock<T>(lock: InFlightLock, operation: () => Promise<T>) {
+  if (lock.current) return undefined;
+  lock.current = true;
+  try {
+    return await operation();
+  } finally {
+    lock.current = false;
+  }
+}
+
 export type LiveTokenProvider = () => Promise<string>;
 export type LiveRequestSender = (init: RequestInit) => Promise<Response>;
 

@@ -92,10 +92,47 @@ test("different target than allowlist is rejected with no Central call", async (
 });
 
 test("incorrect confirmation is rejected with no Central call", async () => {
+  for (const confirmation of [" EXECUTAR RECONCILIAÇÃO LIVE", "EXECUTAR RECONCILIAÇÃO LIVE ", "executar reconciliação live", "EXECUTAR DRY-RUN SEGURO"]) {
+    const s = setup();
+    const response = await handleAdministrativeBillingReconciliationLive(request({ ...payload, confirmation }), s.dependencies);
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: "live_confirmation_required", requestId: "req-test-123" });
+    assert.equal(s.graphqlCalls, 0);
+    assert.equal(s.centralCalls.length, 0);
+  }
+});
+
+test("live body requires application/json before Shopify or Central operations", async () => {
+  for (const contentType of [undefined, "text/plain", "application/x-www-form-urlencoded", "multipart/form-data"]) {
+    const s = setup();
+    const headers: Record<string, string> = {};
+    if (contentType) headers["content-type"] = contentType;
+    const response = await handleAdministrativeBillingReconciliationLive(new Request("https://app.test/app/billing-reconciliation/execute-live", { method: "POST", headers, body: JSON.stringify(payload) }), s.dependencies);
+    assert.equal(response.status, 415);
+    assert.deepEqual(await response.json(), { error: "unsupported_content_type", requestId: "req-test-123" });
+    assert.equal(s.graphqlCalls, 0);
+    assert.equal(s.centralCalls.length, 0);
+  }
+});
+
+test("live body rejects declared and actual payloads above 4 KiB", async () => {
+  for (const body of [JSON.stringify(payload), JSON.stringify({ ...payload, padding: "x".repeat(4096) })]) {
+    const s = setup();
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (body === JSON.stringify(payload)) headers["content-length"] = "4097";
+    const response = await handleAdministrativeBillingReconciliationLive(new Request("https://app.test/app/billing-reconciliation/execute-live", { method: "POST", headers, body }), s.dependencies);
+    assert.equal(response.status, 413);
+    assert.deepEqual(await response.json(), { error: "payload_too_large", requestId: "req-test-123" });
+    assert.equal(s.centralCalls.length, 0);
+  }
+});
+
+test("malformed live JSON returns sanitized JSON 400 with requestId", async () => {
   const s = setup();
-  const response = await handleAdministrativeBillingReconciliationLive(request({ ...payload, confirmation: "EXECUTAR DRY-RUN SEGURO" }), s.dependencies);
+  const response = await handleAdministrativeBillingReconciliationLive(new Request("https://app.test/app/billing-reconciliation/execute-live", { method: "POST", headers: { "content-type": "application/json" }, body: "{" }), s.dependencies);
   assert.equal(response.status, 400);
-  assert.deepEqual(await response.json(), { error: "live_confirmation_required", requestId: "req-test-123" });
+  assert.match(response.headers.get("content-type") || "", /application\/json/);
+  assert.deepEqual(await response.json(), { error: "invalid_json", requestId: "req-test-123" });
   assert.equal(s.graphqlCalls, 0);
   assert.equal(s.centralCalls.length, 0);
 });

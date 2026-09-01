@@ -37,10 +37,11 @@ test("live UI posts only to the dedicated live resource route path", () => {
   assert.equal(componentSource.includes('"/app/billing-reconciliation/execute"'), false);
 });
 
-test("live UI requires a distinct textual confirmation and blocks double-click/running", () => {
+test("live UI requires exact textual confirmation and uses the behavioral in-flight lock", () => {
   assert.equal(componentSource.includes("ADMIN_LIVE_CONFIRMATION_PHRASE"), true);
   assert.equal(componentSource.includes("disabled={!confirmed || running}"), true);
-  assert.equal(componentSource.includes("if (!confirmed || running || !target) return;"), true);
+  assert.equal(componentSource.includes("confirmation === ADMIN_LIVE_CONFIRMATION_PHRASE"), true);
+  assert.equal(componentSource.includes("runWithInFlightLock(inFlightRef"), true);
 });
 
 test("live UI performs exactly one fetch and never retries", () => {

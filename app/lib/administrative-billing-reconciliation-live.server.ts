@@ -33,6 +33,33 @@ const gid = (value: unknown, resource: string) => typeof value === "string" && n
 const string = (value: unknown) => typeof value === "string" && value.trim() ? value.trim() : undefined;
 function object(value: unknown): Record<string, any> { if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_request_body"); return value as Record<string, any>; }
 function jsonError(status: number, error: string, requestId: string) { return Response.json({ error, requestId }, { status }); }
+const MAX_LIVE_BODY_BYTES = 4 * 1024;
+class LiveBodyError extends Error { constructor(readonly code: string, readonly status = 400) { super(code); } }
+async function readLiveJsonBody(request: Request): Promise<Record<string, unknown>> {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!/^application\/json(?:\s*;|$)/i.test(contentType)) throw new LiveBodyError("unsupported_content_type", 415);
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > MAX_LIVE_BODY_BYTES)) throw new LiveBodyError("payload_too_large", 413);
+  if (!request.body) throw new LiveBodyError("invalid_json");
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_LIVE_BODY_BYTES) {
+      await reader.cancel();
+      throw new LiveBodyError("payload_too_large", 413);
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  try { return object(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))); }
+  catch { throw new LiveBodyError("invalid_json"); }
+}
 function logFailure(dependencies: AdminReconciliationLiveDependencies, event: string, error: unknown, shop?: string) {
   dependencies.logger.error(JSON.stringify({ event, route: ADMIN_LIVE_RECONCILIATION_PATH, requestId: dependencies.requestId, errorClass: error instanceof Error ? (error.name || "UnknownError") : "UnknownError", ...(shop ? { shop } : {}) }));
 }
@@ -78,12 +105,13 @@ export async function handleAdministrativeBillingReconciliationLive(request: Req
   const shop = authenticated.session.shop.toLowerCase();
 
   let input: Record<string, unknown>;
-  try { input = object(await request.json()); } catch { return jsonError(400, "invalid_json", dependencies.requestId); }
+  try { input = await readLiveJsonBody(request); }
+  catch (error) { return error instanceof LiveBodyError ? jsonError(error.status, error.code, dependencies.requestId) : jsonError(400, "invalid_json", dependencies.requestId); }
   const allowedInputKeys = ["subscriptionContractId", "subscriptionBillingAttemptId", "shopifyOrderId", "cycleOriginTime", "correlationId", "confirmation"].sort();
   if (JSON.stringify(Object.keys(input).sort()) !== JSON.stringify(allowedInputKeys)) return jsonError(400, "unexpected_field", dependencies.requestId);
 
   const confirmation = input.confirmation;
-  if (typeof confirmation !== "string" || confirmation.trim() !== ADMIN_LIVE_CONFIRMATION_PHRASE) {
+  if (confirmation !== ADMIN_LIVE_CONFIRMATION_PHRASE) {
     return jsonError(400, "live_confirmation_required", dependencies.requestId);
   }
 
