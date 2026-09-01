@@ -5,6 +5,7 @@ import {
   ADMIN_LIVE_CONFIRMATION_PHRASE,
   handleAdministrativeBillingReconciliationLive,
   parseLiveTargets,
+  selectAuthenticatedLiveTarget,
 } from "./administrative-billing-reconciliation-live.server";
 
 const liveTarget = {
@@ -197,6 +198,24 @@ test("live allowlist parser rejects malformed, extra-key and duplicate-shop targ
   assert.deepEqual(parseLiveTargets(JSON.stringify([{ ...liveTarget, extra: true }])), []);
   assert.deepEqual(parseLiveTargets(JSON.stringify([liveTarget, { ...liveTarget, correlationId: "scope9-other" }])), []);
   assert.deepEqual(parseLiveTargets(JSON.stringify([liveTarget])), [liveTarget]);
+});
+
+test("authenticated shop selects only its target independent of allowlist order", () => {
+  const targetA = { ...liveTarget, shop: "a.myshopify.com", correlationId: "scope9-shop-a" };
+  const targetB = { ...liveTarget, shop: "b.myshopify.com", correlationId: "scope9-shop-b", subscriptionBillingAttemptId: "gid://shopify/SubscriptionBillingAttempt/21" };
+  assert.deepEqual(selectAuthenticatedLiveTarget("a.myshopify.com", [targetB, targetA]), targetA);
+  assert.deepEqual(selectAuthenticatedLiveTarget("B.MYSHOPIFY.COM", [targetA, targetB]), targetB);
+  assert.deepEqual(selectAuthenticatedLiveTarget("a.myshopify.com", [targetA, targetB]), targetA);
+});
+
+test("authenticated target selection fails closed without exact unique shop match", () => {
+  const targetA = { ...liveTarget, shop: "a.myshopify.com", correlationId: "scope9-shop-a" };
+  const duplicateA = { ...targetA, correlationId: "scope9-shop-a-duplicate", shopifyOrderId: "gid://shopify/Order/31" };
+  for (const shop of ["unknown.myshopify.com", "a.myshopify.com.evil.test", "evil-a.myshopify.com", " a.myshopify.com", ""]) {
+    assert.equal(selectAuthenticatedLiveTarget(shop, [targetA]), null);
+  }
+  assert.equal(selectAuthenticatedLiveTarget("a.myshopify.com", [targetA, duplicateA]), null);
+  assert.equal(selectAuthenticatedLiveTarget("a.myshopify.com", []), null);
 });
 
 test("authentication stages are observable without secrets", async () => {

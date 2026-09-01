@@ -69,3 +69,9 @@ test("dry-run UI route is unchanged and live stays separate in the shared UI rou
   assert.equal(routeSource.includes("BillingReconciliationDryRunForm"), true);
   assert.equal(routeSource.includes("BillingReconciliationLiveForm"), true);
 });
+
+test("loader selects live target from authenticated session and never falls back to index zero", () => {
+  assert.equal(routeSource.includes("const { session } = await authenticate.admin(request)"), true);
+  assert.equal(routeSource.includes("selectAuthenticatedLiveTarget(session.shop, liveTargets)"), true);
+  assert.equal(routeSource.includes("liveTargets[0]"), false);
+});

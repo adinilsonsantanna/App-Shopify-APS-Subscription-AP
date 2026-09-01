@@ -84,6 +84,16 @@ export function parseLiveTargets(raw: string | undefined): AdminReconciliationLi
   return new Set(targets.map((target) => target.shop)).size === targets.length ? targets : [];
 }
 
+export function selectAuthenticatedLiveTarget(
+  shopDomain: unknown,
+  targets: AdminReconciliationLiveTarget[],
+): AdminReconciliationLiveTarget | null {
+  if (typeof shopDomain !== "string" || !/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(shopDomain)) return null;
+  const normalizedShop = shopDomain.toLowerCase();
+  const matches = targets.filter((target) => target.shop === normalizedShop);
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export async function handleAdministrativeBillingReconciliationLive(request: Request, dependencies: AdminReconciliationLiveDependencies) {
   if (request.method !== "POST") return jsonError(405, "method_not_allowed", dependencies.requestId);
 
