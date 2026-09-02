@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { ADMINISTRATIVE_RECONCILIATION_QUERY } from "./administrative-billing-reconciliation.server";
 import { ADMIN_LIVE_CONFIRMATION_PHRASE } from "./billing-reconciliation-live";
 
@@ -164,6 +165,33 @@ export async function handleAdministrativeBillingReconciliationLive(request: Req
 
     const apiUrl = dependencies.apiUrl.replace(/\/$/, "");
     logInfo(dependencies, "central_live_started", "calling_central", { shop });
+    const outbound = {
+      shopDomain: shop,
+      shopId: shopNode.id,
+      subscriptionContractId: contract.id,
+      subscriptionBillingAttemptId: attempt.id,
+      shopifyOrderId: order.id,
+      cycleOriginTime: attempt.originTime,
+      status: "succeeded",
+      amount,
+      currencyCode,
+      attemptedAt: completedAt,
+      completedAt,
+      orderProcessedAt,
+      test: true,
+      gateway: "bogus",
+      correlationId,
+      dryRun: false,
+    };
+    const outboundKeys = Object.keys(outbound).sort();
+    const fingerprint = createHash("sha256").update(JSON.stringify(outboundKeys)).digest("hex");
+    logInfo(dependencies, "central_live_outbound_keys", "pre_central", {
+      shop,
+      keyCount: outboundKeys.length,
+      keyNames: outboundKeys.join(","),
+      fingerprint,
+      correlationId,
+    });
     const central = await dependencies.fetchFn(`${apiUrl}/api/administrative-reconciliation/billing-attempt/live`, {
       method: "POST",
       headers: {
@@ -171,24 +199,7 @@ export async function handleAdministrativeBillingReconciliationLive(request: Req
         "x-api-key": dependencies.apiKey,
         "x-admin-live-key": dependencies.liveSecret,
       },
-      body: JSON.stringify({
-        shopDomain: shop,
-        shopId: shopNode.id,
-        subscriptionContractId: contract.id,
-        subscriptionBillingAttemptId: attempt.id,
-        shopifyOrderId: order.id,
-        cycleOriginTime: attempt.originTime,
-        status: "succeeded",
-        amount,
-        currencyCode,
-        attemptedAt: completedAt,
-        completedAt,
-        orderProcessedAt,
-        test: true,
-        gateway: "bogus",
-        correlationId,
-        dryRun: false,
-      }),
+      body: JSON.stringify(outbound),
     });
     logInfo(dependencies, "central_live_completed", "central_done", { shop, status: central.status });
     let result: unknown;
@@ -197,6 +208,16 @@ export async function handleAdministrativeBillingReconciliationLive(request: Req
       if (!central.ok) return jsonError(502, "central_api_error", dependencies.requestId);
       return jsonError(502, "central_api_invalid_response", dependencies.requestId);
     }
+    const centralRequestId = (() => {
+      if (!result || typeof result !== "object" || Array.isArray(result)) return undefined;
+      const value = (result as Record<string, unknown>).requestId;
+      return typeof value === "string" && /^[A-Za-z0-9._:-]{1,160}$/.test(value) ? value : undefined;
+    })();
+    logInfo(dependencies, "central_live_response", "central_response", {
+      shop,
+      status: central.status,
+      ...(centralRequestId ? { centralRequestId } : {}),
+    });
     if (!central.ok) {
       const err = object(result);
       return Response.json({ error: typeof err.error === "string" ? err.error : "central_api_error", requestId: dependencies.requestId }, { status: central.status >= 400 && central.status < 600 ? central.status : 502 });
