@@ -31,7 +31,7 @@ export const ADMIN_LIVE_RECONCILIATION_RESOURCE_PATH = ADMIN_LIVE_RECONCILIATION
 
 const gid = (value: unknown, resource: string) => typeof value === "string" && new RegExp(`^gid://shopify/${resource}/[1-9][0-9]*$`).test(value);
 const string = (value: unknown) => typeof value === "string" && value.trim() ? value.trim() : undefined;
-function object(value: unknown): Record<string, any> { if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_request_body"); return value as Record<string, any>; }
+function object(value: unknown): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_request_body"); return value as Record<string, unknown>; }
 function jsonError(status: number, error: string, requestId: string) { return Response.json({ error, requestId }, { status }); }
 const MAX_LIVE_BODY_BYTES = 4 * 1024;
 class LiveBodyError extends Error { constructor(readonly code: string, readonly status = 400) { super(code); } }
@@ -44,9 +44,13 @@ async function readLiveJsonBody(request: Request): Promise<Record<string, unknow
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
-  while (true) {
+  let reading = true;
+  while (reading) {
     const { done, value } = await reader.read();
-    if (done) break;
+    if (done) {
+      reading = false;
+      continue;
+    }
     size += value.byteLength;
     if (size > MAX_LIVE_BODY_BYTES) {
       await reader.cancel();
@@ -145,11 +149,15 @@ export async function handleAdministrativeBillingReconciliationLive(request: Req
     logInfo(dependencies, "live_shopify_read_started", "reading_shopify", { shop });
     const response = await authenticated.admin.graphql(ADMINISTRATIVE_RECONCILIATION_QUERY, { variables: { attemptId } });
     const body = object(await response.json());
-    if (!response.ok || body.errors?.length) return jsonError(502, "shopify_query_failed", dependencies.requestId);
+    if (!response.ok || (Array.isArray(body.errors) && body.errors.length > 0)) return jsonError(502, "shopify_query_failed", dependencies.requestId);
     const data = object(body.data), shopNode = object(data.shop), attempt = object(data.subscriptionBillingAttempt), contract = object(attempt.subscriptionContract), state = object(attempt.state), order = object(state.order), money = object(object(order.currentTotalPriceSet).shopMoney);
     if (!gid(shopNode.id, "Shop") || state.__typename !== "SubscriptionBillingAttemptSuccessState" || attempt.id !== attemptId || contract.id !== contractId || order.id !== orderId || attempt.originTime !== cycle || order.test !== true || order.displayFinancialStatus !== "PAID") return jsonError(409, "shopify_identity_mismatch", dependencies.requestId);
     const transactions = Array.isArray(order.transactions) ? order.transactions : [];
-    if (!transactions.some((transaction: any) => transaction?.gateway === "bogus" && transaction?.test === true && transaction?.status === "SUCCESS")) return jsonError(409, "shopify_test_gateway_mismatch", dependencies.requestId);
+    if (!transactions.some((transaction: unknown) => {
+      if (!transaction || typeof transaction !== "object" || Array.isArray(transaction)) return false;
+      const record = transaction as Record<string, unknown>;
+      return record.gateway === "bogus" && record.test === true && record.status === "SUCCESS";
+    })) return jsonError(409, "shopify_test_gateway_mismatch", dependencies.requestId);
     const completedAt = string(attempt.completedAt), orderProcessedAt = string(order.processedAt), amount = string(money.amount), currencyCode = string(money.currencyCode);
     if (!completedAt || !orderProcessedAt || !amount || !currencyCode) return jsonError(409, "shopify_reconciliation_incomplete", dependencies.requestId);
     logInfo(dependencies, "live_shopify_read_completed", "shopify_read_done", { shop });
