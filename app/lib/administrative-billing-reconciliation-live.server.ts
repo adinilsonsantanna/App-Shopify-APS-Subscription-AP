@@ -186,7 +186,6 @@ export async function handleAdministrativeBillingReconciliationLive(request: Req
     const outboundKeys = Object.keys(outbound).sort();
     const fingerprint = createHash("sha256").update(JSON.stringify(outboundKeys)).digest("hex");
     logInfo(dependencies, "central_live_outbound_keys", "pre_central", {
-      shop,
       keyCount: outboundKeys.length,
       keyNames: outboundKeys.join(","),
       fingerprint,
@@ -214,8 +213,8 @@ export async function handleAdministrativeBillingReconciliationLive(request: Req
       return typeof value === "string" && /^[A-Za-z0-9._:-]{1,160}$/.test(value) ? value : undefined;
     })();
     logInfo(dependencies, "central_live_response", "central_response", {
-      shop,
       status: central.status,
+      correlationId,
       ...(centralRequestId ? { centralRequestId } : {}),
     });
     if (!central.ok) {

@@ -321,6 +321,22 @@ test("pre-Central log emits key names, count and deterministic SHA-256 fingerpri
   assert.equal(raw.includes("live-secret"), false);
 });
 
+test("novos eventos de observabilidade nunca expõem domínio da loja nem valores do payload", async () => {
+  const s = setup();
+  await handleAdministrativeBillingReconciliationLive(request(), s.dependencies);
+  const entries = s.logs
+    .map((args) => (args as unknown[]).find((arg): arg is string => typeof arg === "string" && (arg.includes("central_live_outbound_keys") || arg.includes("central_live_response"))))
+    .filter((value): value is string => typeof value === "string");
+  assert.equal(entries.length, 2);
+  for (const entry of entries) {
+    assert.ok(!entry.includes("one.myshopify.com"));
+    assert.ok(!entry.includes("50.19"));
+    assert.ok(!entry.includes("gid://shopify/Order/30"));
+    assert.ok(!entry.includes("central-secret"));
+    assert.ok(!entry.includes("live-secret"));
+  }
+});
+
 test("post-Central log includes sanitized centralRequestId when present and omits it otherwise", async () => {
   const withId = setup({ fetchFn: async () => Response.json({ status: "reconciled", requestId: "central-req-42" }) });
   await handleAdministrativeBillingReconciliationLive(request(), withId.dependencies);
