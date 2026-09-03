@@ -4,11 +4,16 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { authenticate } from "../shopify.server";
 import { ADMIN_RECONCILIATION_DRY_RUN_TARGETS } from "../lib/administrative-billing-reconciliation-route.server";
 import { parseLiveTargets, selectAuthenticatedLiveTarget } from "../lib/administrative-billing-reconciliation-live.server";
+import { isAdministrativeReconciliationShopAllowed } from "../lib/administrative-reconciliation-allowlist.server";
 import { BillingReconciliationDryRunForm } from "../components/billing-reconciliation-dry-run-form";
 import { BillingReconciliationLiveForm } from "../components/billing-reconciliation-live-form";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
+
+  if (!isAdministrativeReconciliationShopAllowed(session.shop)) {
+    throw new Response("Not Found", { status: 404 });
+  }
 
   const liveTargets = parseLiveTargets(process.env.ADMIN_RECONCILIATION_LIVE_TARGETS);
   const liveEnabled = process.env.ADMIN_BILLING_RECONCILIATION_LIVE_ENABLED === "true";

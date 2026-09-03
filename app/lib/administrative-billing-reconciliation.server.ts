@@ -1,3 +1,5 @@
+import { isAdministrativeReconciliationShopAllowed } from "./administrative-reconciliation-allowlist.server";
+
 type Admin = { graphql(query: string, options: { variables: Record<string, unknown> }): Promise<Response> };
 type Authenticated = { admin: Admin; session: { shop: string } };
 export type AdminReconciliationDependencies = {
@@ -83,6 +85,8 @@ export async function handleAdministrativeBillingReconciliation(request: Request
     return jsonError(503, "shopify_authentication_unavailable", dependencies.requestId);
   }
   dependencies.logger.info(JSON.stringify({ event: "authentication_completed", route: ADMINISTRATIVE_RECONCILIATION_RESOURCE_PATH, requestId: dependencies.requestId, stage: "authenticated", shop: authenticated.session.shop }));
+  const authenticatedShop = authenticated.session.shop.toLowerCase();
+  if (!isAdministrativeReconciliationShopAllowed(authenticatedShop)) return jsonError(404, "not_found", dependencies.requestId);
   let input: Record<string, unknown>;
   try { input = object(await request.json()); } catch { return jsonError(400, "invalid_json", dependencies.requestId); }
   const attemptId = input.subscriptionBillingAttemptId, expectedContractId = input.subscriptionContractId, expectedOrderId = input.shopifyOrderId, expectedCycle = input.cycleOriginTime, correlationId = input.correlationId;

@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ADMINISTRATIVE_RECONCILIATION_QUERY, handleAdministrativeBillingReconciliation } from "./administrative-billing-reconciliation.server";
+import { ADMINISTRATIVE_RECONCILIATION_ALLOWED_SHOP, isAdministrativeReconciliationShopAllowed } from "./administrative-reconciliation-allowlist.server";
+
+const allowedShop = ADMINISTRATIVE_RECONCILIATION_ALLOWED_SHOP;
 
 const target = { subscriptionContractId: "gid://shopify/SubscriptionContract/10", subscriptionBillingAttemptId: "gid://shopify/SubscriptionBillingAttempt/20", shopifyOrderId: "gid://shopify/Order/30", cycleOriginTime: "2026-09-27T16:00:00Z", correlationId: "scope9-live-cycle", dryRun: true };
 function request(body: any = target, url = "https://app.test/app/billing-reconciliation") { return new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); }
 function setup(overrides: Record<string, any> = {}) {
   let graphqlCalls = 0; const centralBodies: any[] = [], logs: any[] = [];
   const data = { shop: { id: "gid://shopify/Shop/1" }, subscriptionBillingAttempt: { id: target.subscriptionBillingAttemptId, originTime: target.cycleOriginTime, createdAt: "2026-08-27T17:28:44Z", completedAt: "2026-08-27T17:28:45Z", subscriptionContract: { id: target.subscriptionContractId }, state: { __typename: "SubscriptionBillingAttemptSuccessState", order: { id: target.shopifyOrderId, test: true, displayFinancialStatus: "PAID", processedAt: "2026-08-27T17:28:51.161Z", currentTotalPriceSet: { shopMoney: { amount: "50.19", currencyCode: "BRL" } }, transactions: [{ gateway: "bogus", test: true, status: "SUCCESS" }] } } } };
-  const dependencies: any = { authenticate: async () => ({ session: { shop: "one.myshopify.com", accessToken: "never-forward" }, admin: { graphql: async () => { graphqlCalls++; return Response.json({ data }); } } }), apiUrl: "https://central.test", apiKey: "central-secret", requestId: "req-test-123", fetchFn: async (_url: any, init: any) => { centralBodies.push(JSON.parse(init.body)); return Response.json({ status: "dry_run" }); }, logger: { error: (...args: any[]) => logs.push(args), info: (...args: any[]) => logs.push(args) }, ...overrides };
+  const dependencies: any = { authenticate: async () => ({ session: { shop: allowedShop, accessToken: "never-forward" }, admin: { graphql: async () => { graphqlCalls++; return Response.json({ data }); } } }), apiUrl: "https://central.test", apiKey: "central-secret", requestId: "req-test-123", fetchFn: async (_url: any, init: any) => { centralBodies.push(JSON.parse(init.body)); return Response.json({ status: "dry_run" }); }, logger: { error: (...args: any[]) => logs.push(args), info: (...args: any[]) => logs.push(args) }, ...overrides };
   return { dependencies, data, centralBodies, logs, get graphqlCalls() { return graphqlCalls; } };
 }
 
@@ -16,9 +19,9 @@ test("authentication infrastructure errors are JSON 503 and not mislabeled as 40
 test("invalid JSON is a sanitized JSON 400", async () => { const s = setup(); const response = await handleAdministrativeBillingReconciliation(new Request("https://app.test/app/billing-reconciliation", { method: "POST", body: "{" }), s.dependencies); assert.equal(response.status, 400); assert.deepEqual(await response.json(), { error: "invalid_json", requestId: "req-test-123" }); });
 test("missing API_SUBSCRIPTION_URL is a JSON 503 before Shopify GraphQL", async () => { const s = setup({ apiUrl: undefined }); const response = await handleAdministrativeBillingReconciliation(request(), s.dependencies); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { error: "api_subscription_url_missing", requestId: "req-test-123" }); assert.equal(s.graphqlCalls, 0); });
 test("missing API_KEY is a JSON 503 before Shopify GraphQL", async () => { const s = setup({ apiKey: undefined }); const response = await handleAdministrativeBillingReconciliation(request(), s.dependencies); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { error: "api_key_missing", requestId: "req-test-123" }); assert.equal(s.graphqlCalls, 0); });
-test("authenticated action separates billing completion from Shopify order processing time", async () => { const s = setup(); const response = await handleAdministrativeBillingReconciliation(request(), s.dependencies); assert.equal(response.status, 200); assert.equal(s.centralBodies[0].shopDomain, "one.myshopify.com"); assert.equal(s.centralBodies[0].shopId, "gid://shopify/Shop/1"); assert.equal(s.centralBodies[0].amount, "50.19"); assert.equal(s.centralBodies[0].gateway, "bogus"); assert.equal(s.centralBodies[0].attemptedAt, "2026-08-27T17:28:45Z"); assert.equal(s.centralBodies[0].completedAt, "2026-08-27T17:28:45Z"); assert.equal(s.centralBodies[0].orderProcessedAt, "2026-08-27T17:28:51.161Z"); });
+test("authenticated action separates billing completion from Shopify order processing time", async () => { const s = setup(); const response = await handleAdministrativeBillingReconciliation(request(), s.dependencies); assert.equal(response.status, 200); assert.equal(s.centralBodies[0].shopDomain, allowedShop); assert.equal(s.centralBodies[0].shopId, "gid://shopify/Shop/1"); assert.equal(s.centralBodies[0].amount, "50.19"); assert.equal(s.centralBodies[0].gateway, "bogus"); assert.equal(s.centralBodies[0].attemptedAt, "2026-08-27T17:28:45Z"); assert.equal(s.centralBodies[0].completedAt, "2026-08-27T17:28:45Z"); assert.equal(s.centralBodies[0].orderProcessedAt, "2026-08-27T17:28:51.161Z"); });
 test("missing Shopify order processedAt fails closed without Central call", async () => { const s = setup(); Reflect.deleteProperty(s.data.subscriptionBillingAttempt.state.order, "processedAt"); const response = await handleAdministrativeBillingReconciliation(request(), s.dependencies); assert.equal(response.status, 409); assert.deepEqual(await response.json(), { error: "shopify_reconciliation_incomplete", requestId: "req-test-123" }); assert.equal(s.centralBodies.length, 0); });
-test("forged query string and body shop identities cannot select the tenant", async () => { const s = setup(); await handleAdministrativeBillingReconciliation(request({ ...target, shop: "forged.myshopify.com", shopId: "gid://shopify/Shop/999" }, "https://app.test/app/billing-reconciliation?shop=forged.myshopify.com"), s.dependencies); assert.equal(s.centralBodies[0].shopDomain, "one.myshopify.com"); assert.equal(s.centralBodies[0].shopId, "gid://shopify/Shop/1"); });
+test("forged query string and body shop identities cannot select the tenant", async () => { const s = setup(); await handleAdministrativeBillingReconciliation(request({ ...target, shop: "forged.myshopify.com", shopId: "gid://shopify/Shop/999" }, "https://app.test/app/billing-reconciliation?shop=forged.myshopify.com"), s.dependencies); assert.equal(s.centralBodies[0].shopDomain, allowedShop); assert.equal(s.centralBodies[0].shopId, "gid://shopify/Shop/1"); });
 test("cross-linked contract order or cycle is rejected without Central write", async () => { for (const field of ["subscriptionContractId", "shopifyOrderId", "cycleOriginTime"] as const) { const s = setup(); (s.data.subscriptionBillingAttempt as any)[field === "subscriptionContractId" ? "subscriptionContract" : field === "shopifyOrderId" ? "state" : "originTime"] = field === "subscriptionContractId" ? { id: "gid://shopify/SubscriptionContract/11" } : field === "shopifyOrderId" ? { ...s.data.subscriptionBillingAttempt.state, order: { ...s.data.subscriptionBillingAttempt.state.order, id: "gid://shopify/Order/31" } } : "2026-10-27T16:00:00Z"; const response = await handleAdministrativeBillingReconciliation(request(), s.dependencies); assert.equal(response.status, 409); assert.equal(s.centralBodies.length, 0); } });
 test("non-test order and non-bogus gateway fail closed", async () => { for (const mutate of [(s: any) => { s.data.subscriptionBillingAttempt.state.order.test = false; }, (s: any) => { s.data.subscriptionBillingAttempt.state.order.transactions[0].gateway = "other"; }]) { const s = setup(); mutate(s); const response = await handleAdministrativeBillingReconciliation(request(), s.dependencies); assert.equal(response.status, 409); assert.equal(s.centralBodies.length, 0); } });
 test("query is statically read-only and has no financial mutation surface", () => { assert.match(ADMINISTRATIVE_RECONCILIATION_QUERY, /^#graphql\s*query/); for (const forbidden of ["subscriptionBillingAttemptCreate", "orderCreate", "mutation", "stripe", "email", "webhook"] ) assert.equal(ADMINISTRATIVE_RECONCILIATION_QUERY.toLowerCase().includes(forbidden.toLowerCase()), false); });
@@ -44,7 +47,7 @@ test("observability stage events emit only requestId, stage, status and authoriz
   for (const e of stageEvents) {
     if (e.event === "authentication_completed" || e.event === "shopify_read_completed") {
       assert.deepEqual(Object.keys(e).sort(), ["event", "requestId", "route", "shop", "stage"].sort());
-      assert.equal(e.shop, "one.myshopify.com");
+      assert.equal(e.shop, allowedShop);
       continue;
     }
     if (e.event === "central_dry_run_completed") {
@@ -57,4 +60,26 @@ test("observability stage events emit only requestId, stage, status and authoriz
   }
   assert.equal(JSON.stringify(events).includes("never-forward"), false);
   assert.equal(JSON.stringify(events).includes("central-secret"), false);
+});
+
+const badShops = ["one.myshopify.com", "betterlife.store", "betterlife-myshopify.myshopify.com", "aps-test-store.myshopify.com", "aps-test-store-hx3rwtgw.myshopify.com.evil.com", "aps-test-store-hx3rwtgw.myshopify.com.attacker.com", "xaps-test-store-hx3rwtgw.myshopify.com", "APS-TEST-STORE-HX3RWTGW.MYSHOPIFY.COM."];
+test("non-allowlisted shops are denied 404 before any Shopify read or Central write", async () => {
+  for (const shop of badShops) {
+    const s = setup({ authenticate: async () => ({ session: { shop }, admin: { graphql: async () => { throw new Error("must not run"); } } }) });
+    const response = await handleAdministrativeBillingReconciliation(request(), s.dependencies);
+    assert.equal(response.status, 404, `shop ${shop}`);
+    assert.deepEqual(await response.json(), { error: "not_found", requestId: "req-test-123" });
+    assert.equal(s.graphqlCalls, 0, `graphql for ${shop}`);
+    assert.equal(s.centralBodies.length, 0, `central for ${shop}`);
+  }
+});
+test("APS Test Store matches case-insensitively with surrounding whitespace", async () => {
+  for (const shop of ["APS-TEST-STORE-HX3RWTGW.MYSHOPIFY.COM", "  aps-test-store-hx3rwtgw.myshopify.com  ", "Aps-Test-Store-Hx3rwtgw.Myshopify.com"]) {
+    const s = setup({ authenticate: async () => ({ session: { shop }, admin: { graphql: async () => Response.json({ data: s.data }) } }) });
+    const response = await handleAdministrativeBillingReconciliation(request(), s.dependencies);
+    assert.equal(response.status, 200, `shop ${shop}`);
+  }
+  assert.equal(isAdministrativeReconciliationShopAllowed("APS-TEST-STORE-HX3RWTGW.MYSHOPIFY.COM"), true);
+  assert.equal(isAdministrativeReconciliationShopAllowed(" betterlife.myshopify.com"), false);
+  assert.equal(isAdministrativeReconciliationShopAllowed("not-a-shop"), false);
 });
