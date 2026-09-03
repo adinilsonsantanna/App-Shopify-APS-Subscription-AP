@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { ADMINISTRATIVE_RECONCILIATION_QUERY } from "./administrative-billing-reconciliation.server";
 import {
@@ -284,4 +285,68 @@ test("missing live secret blocks before Central call", async () => {
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { error: "live_secret_missing", requestId: "req-test-123" });
   assert.equal(s.centralCalls.length, 0);
+});
+
+test("outbound Central body has exactly 16 keys and never includes confirmation", async () => {
+  const s = setup();
+  await handleAdministrativeBillingReconciliationLive(request(), s.dependencies);
+  const init = s.centralCalls[0].init;
+  assert.ok(init);
+  if (typeof init.body !== "string") assert.fail("expected JSON string body");
+  const body = JSON.parse(init.body);
+  assert.equal(Object.keys(body).length, 16);
+  assert.equal("confirmation" in body, false);
+  for (const value of Object.values(body)) assert.notEqual(typeof value, "undefined");
+});
+
+test("pre-Central log emits key names, count and deterministic SHA-256 fingerprint without values", async () => {
+  const s = setup();
+  await handleAdministrativeBillingReconciliationLive(request(), s.dependencies);
+  const raw = JSON.stringify(s.logs);
+  const expectedKeys = ["amount", "attemptedAt", "completedAt", "correlationId", "currencyCode", "cycleOriginTime", "dryRun", "gateway", "orderProcessedAt", "shopDomain", "shopId", "status", "subscriptionBillingAttemptId", "subscriptionContractId", "test", "shopifyOrderId"].sort();
+  const expectedFingerprint = createHash("sha256").update(JSON.stringify(expectedKeys)).digest("hex");
+  const outbound = s.logs.map((args) => (args as unknown[]).find((arg): arg is string => typeof arg === "string" && arg.includes("central_live_outbound_keys"))).find((value): value is string => typeof value === "string");
+  assert.ok(outbound, "central_live_outbound_keys log missing");
+  const parsed = JSON.parse(outbound) as Record<string, unknown>;
+  assert.equal(parsed.event, "central_live_outbound_keys");
+  assert.equal(parsed.keyCount, 16);
+  assert.equal(parsed.fingerprint, expectedFingerprint);
+  assert.equal(parsed.keyNames, expectedKeys.join(","));
+  assert.equal(parsed.correlationId, "scope9-live-cycle");
+  assert.equal(parsed.requestId, "req-test-123");
+  assert.equal(raw.includes("50.19"), false);
+  assert.equal(raw.includes("gid://shopify/Order/30"), false);
+  assert.equal(raw.includes("EXECUTAR"), false);
+  assert.equal(raw.includes("central-secret"), false);
+  assert.equal(raw.includes("live-secret"), false);
+});
+
+test("novos eventos de observabilidade nunca expõem domínio da loja nem valores do payload", async () => {
+  const s = setup();
+  await handleAdministrativeBillingReconciliationLive(request(), s.dependencies);
+  const entries = s.logs
+    .map((args) => (args as unknown[]).find((arg): arg is string => typeof arg === "string" && (arg.includes("central_live_outbound_keys") || arg.includes("central_live_response"))))
+    .filter((value): value is string => typeof value === "string");
+  assert.equal(entries.length, 2);
+  for (const entry of entries) {
+    assert.ok(!entry.includes("one.myshopify.com"));
+    assert.ok(!entry.includes("50.19"));
+    assert.ok(!entry.includes("gid://shopify/Order/30"));
+    assert.ok(!entry.includes("central-secret"));
+    assert.ok(!entry.includes("live-secret"));
+  }
+});
+
+test("post-Central log includes sanitized centralRequestId when present and omits it otherwise", async () => {
+  const withId = setup({ fetchFn: async () => Response.json({ status: "reconciled", requestId: "central-req-42" }) });
+  await handleAdministrativeBillingReconciliationLive(request(), withId.dependencies);
+  const entryId = JSON.stringify(withId.logs);
+  assert.equal(entryId.includes("central_live_response"), true);
+  assert.equal(entryId.includes("central-req-42"), true);
+
+  const withoutId = setup();
+  await handleAdministrativeBillingReconciliationLive(request(), withoutId.dependencies);
+  const entryNoId = JSON.stringify(withoutId.logs);
+  assert.equal(entryNoId.includes("central_live_response"), true);
+  assert.equal(entryNoId.includes("centralRequestId"), false);
 });
