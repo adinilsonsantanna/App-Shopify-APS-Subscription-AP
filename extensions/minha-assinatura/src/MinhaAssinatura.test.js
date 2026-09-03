@@ -97,6 +97,7 @@ function contract(status = "ACTIVE") {
     status,
     currencyCode: "BRL",
     nextBillingDate: "2026-09-10T00:00:00Z",
+    deliveryPrice: { amount: "10.00", currencyCode: "BRL" },
     billingPolicy: { interval: "MONTH", intervalCount: { count: 1 } },
     deliveryPolicy: { interval: "WEEK", intervalCount: { count: 2 } },
     lines: {
@@ -154,6 +155,106 @@ test("renders contracts and all subscription details", async () => {
   assert.match(documentRef.body.textContent, /Cobrança a cada 1 mês/);
   assert.match(documentRef.body.textContent, /Entrega a cada 2 semanas/);
   assert.match(documentRef.body.textContent, /Próxima cobrança:/);
+});
+
+test("includes delivery price in the displayed total", async () => {
+  const documentRef = new FakeDocument();
+  const controller = bootstrapExtension(documentRef.body, {
+    documentRef,
+    request: async () => dataWith([contract()]),
+  });
+  await controller.ready;
+
+  assert.match(documentRef.body.textContent, /Total:/);
+  assert.match(documentRef.body.textContent, /R\$\s*109,80/);
+});
+
+test("renders next billing date in dd/mm/yyyy pt-BR", async () => {
+  const documentRef = new FakeDocument();
+  const controller = bootstrapExtension(documentRef.body, {
+    documentRef,
+    request: async () =>
+      dataWith([
+        {
+          ...contract(),
+          nextBillingDate: "2026-10-03T20:00:00Z",
+        },
+      ]),
+  });
+  await controller.ready;
+
+  assert.match(documentRef.body.textContent, /Próxima cobrança:/);
+  assert.match(documentRef.body.textContent, /03\/10\/2026/);
+  assert.doesNotMatch(documentRef.body.textContent, /2026-10-03/);
+});
+
+test("totals discounted lines plus delivery price", async () => {
+  const documentRef = new FakeDocument();
+  const controller = bootstrapExtension(documentRef.body, {
+    documentRef,
+    request: async () =>
+      dataWith([
+        {
+          ...contract(),
+          nextBillingDate: "2026-10-03T20:00:00Z",
+          deliveryPrice: { amount: "40.75", currencyCode: "BRL" },
+          lines: {
+            nodes: [
+              {
+                ...contract().lines.nodes[0],
+                quantity: 1,
+                currentPrice: { amount: "9.00", currencyCode: "BRL" },
+              },
+            ],
+          },
+        },
+      ]),
+  });
+  await controller.ready;
+
+  assert.match(documentRef.body.textContent, /Entrega:/);
+  assert.match(documentRef.body.textContent, /R\$\s*40,75/);
+  assert.match(documentRef.body.textContent, /Total:/);
+  assert.match(documentRef.body.textContent, /R\$\s*49,75/);
+});
+
+test("total omits delivery when deliveryPrice is absent", async () => {
+  const documentRef = new FakeDocument();
+  const controller = bootstrapExtension(documentRef.body, {
+    documentRef,
+    request: async () =>
+      dataWith([
+        {
+          ...contract(),
+          deliveryPrice: null,
+          lines: {
+            nodes: [
+              {
+                ...contract().lines.nodes[0],
+                quantity: 1,
+                currentPrice: { amount: "12.00", currencyCode: "BRL" },
+              },
+            ],
+          },
+        },
+      ]),
+  });
+  await controller.ready;
+
+  assert.doesNotMatch(documentRef.body.textContent, /Entrega:/);
+  assert.match(documentRef.body.textContent, /R\$\s*12,00/);
+});
+
+test("renders delivery price line and hides next billing when cancelled", async () => {
+  const documentRef = new FakeDocument();
+  const controller = bootstrapExtension(documentRef.body, {
+    documentRef,
+    request: async () => dataWith([contract("CANCELLED")]),
+  });
+  await controller.ready;
+
+  assert.match(documentRef.body.textContent, /Cancelada/);
+  assert.doesNotMatch(documentRef.body.textContent, /Próxima cobrança:/);
 });
 
 test("renders the empty state", async () => {

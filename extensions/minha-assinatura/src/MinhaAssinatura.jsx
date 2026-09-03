@@ -19,6 +19,7 @@ export const SUBSCRIPTIONS_QUERY = `#graphql
           status
           currencyCode
           nextBillingDate
+          deliveryPrice { amount currencyCode }
           billingPolicy { interval intervalCount { count } }
           deliveryPolicy { interval intervalCount { count } }
           lines(first: 50) {
@@ -366,12 +367,26 @@ function renderContract(
     stack.appendChild(lineStack);
   }
 
-  const total = lines.reduce(
+  const linesTotal = lines.reduce(
     (sum, line) =>
       sum +
       Number(line?.currentPrice?.amount ?? 0) * Number(line?.quantity ?? 0),
     0,
   );
+  const deliveryAmount = Number(contract?.deliveryPrice?.amount ?? 0);
+  const total = linesTotal + deliveryAmount;
+  if (contract?.deliveryPrice?.amount) {
+    stack.appendChild(
+      textElement(
+        documentRef,
+        "s-text",
+        `Entrega: ${formatMoney(
+          contract.deliveryPrice.amount,
+          contract.deliveryPrice.currencyCode,
+        )}`,
+      ),
+    );
+  }
   stack.appendChild(
     textElement(
       documentRef,
@@ -394,17 +409,20 @@ function renderContract(
       formatFrequency("Entrega", contract.deliveryPolicy),
     ),
   );
-  stack.appendChild(
-    textElement(
-      documentRef,
-      "s-text",
-      `Próxima cobrança: ${
-        contract.nextBillingDate
-          ? formatDate(contract.nextBillingDate)
-          : "Não disponível"
-      }`,
-    ),
-  );
+  const isCancelled = ["CANCELLED", "CANCELED"].includes(contract.status);
+  if (!isCancelled) {
+    stack.appendChild(
+      textElement(
+        documentRef,
+        "s-text",
+        `Próxima cobrança: ${
+          contract.nextBillingDate
+            ? formatDate(contract.nextBillingDate)
+            : "Não disponível"
+        }`,
+      ),
+    );
+  }
 
   const actions = contractActions(contract.status);
   if (actions.length > 0) {
@@ -524,9 +542,12 @@ function formatMoney(amount, currencyCode) {
 
 function formatDate(value) {
   try {
-    return new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(
-      new Date(value),
-    );
+    return new Intl.DateTimeFormat("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(new Date(value));
   } catch {
     return value;
   }
