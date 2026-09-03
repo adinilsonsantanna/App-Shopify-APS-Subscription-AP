@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { ADMINISTRATIVE_RECONCILIATION_QUERY } from "./administrative-billing-reconciliation.server";
+import { ADMINISTRATIVE_RECONCILIATION_ALLOWED_SHOP } from "./administrative-reconciliation-allowlist.server";
 import {
   type AdminReconciliationLiveDependencies,
   ADMIN_LIVE_CONFIRMATION_PHRASE,
@@ -10,8 +11,10 @@ import {
   selectAuthenticatedLiveTarget,
 } from "./administrative-billing-reconciliation-live.server";
 
+const allowedShop = ADMINISTRATIVE_RECONCILIATION_ALLOWED_SHOP;
+
 const liveTarget = {
-  shop: "one.myshopify.com",
+  shop: allowedShop,
   subscriptionContractId: "gid://shopify/SubscriptionContract/10",
   subscriptionBillingAttemptId: "gid://shopify/SubscriptionBillingAttempt/20",
   shopifyOrderId: "gid://shopify/Order/30",
@@ -90,6 +93,20 @@ test("non-authorized shop is rejected with no Central call", async () => {
   assert.deepEqual(await response.json(), { error: "shop_not_authorized", requestId: "req-test-123" });
   assert.equal(s.graphqlCalls, 0);
   assert.equal(s.centralCalls.length, 0);
+});
+
+test("non-allowlisted shop is denied 404 before Shopify read or Central write even if listed in live targets", async () => {
+  for (const shop of ["one.myshopify.com", "betterlife.myshopify.com", "APS-TEST-STORE-HX3RWTGW.MYSHOPIFY.COM."]) {
+    const s = setup({
+      authenticate: async () => ({ session: { shop, accessToken: "never-forward" }, admin: { graphql: async () => { throw new Error("must not run"); } } }),
+      liveTargets: [{ ...liveTarget, shop }],
+    });
+    const response = await handleAdministrativeBillingReconciliationLive(request(), s.dependencies);
+    assert.equal(response.status, 404, `shop ${shop}`);
+    assert.deepEqual(await response.json(), { error: "not_found", requestId: "req-test-123" });
+    assert.equal(s.graphqlCalls, 0, `graphql for ${shop}`);
+    assert.equal(s.centralCalls.length, 0, `central for ${shop}`);
+  }
 });
 
 test("missing live targets blocks with no Central call", async () => {
@@ -332,7 +349,7 @@ test("novos eventos de observabilidade nunca expõem domínio da loja nem valore
     .filter((value): value is string => typeof value === "string");
   assert.equal(entries.length, 2);
   for (const entry of entries) {
-    assert.ok(!entry.includes("one.myshopify.com"));
+    assert.ok(!entry.includes(allowedShop));
     assert.ok(!entry.includes("50.19"));
     assert.ok(!entry.includes("gid://shopify/Order/30"));
     assert.ok(!entry.includes("central-secret"));
@@ -367,17 +384,17 @@ test("body with shop field is rejected fail-closed with no authentication or Cen
 test("body shop never controls identity; session.shop selects and authorizes target", async () => {
   const s = setup({
     authenticate: async () => ({
-      session: { shop: "two.myshopify.com", accessToken: "never-forward" },
+      session: { shop: allowedShop, accessToken: "never-forward" },
       admin: {
         graphql: async () => {
-          assert.fail("GraphQL should not be called: shop_not_authorized");
+          assert.fail("GraphQL should not be called: target_not_authorized");
           return Response.json({ data: {} });
         },
       },
     }),
     liveTargets: [
-      { ...liveTarget, shop: "one.myshopify.com" },
-      { ...liveTarget, shop: "two.myshopify.com", subscriptionBillingAttemptId: "gid://shopify/SubscriptionBillingAttempt/40" },
+      { ...liveTarget, shop: "other.myshopify.com" },
+      { ...liveTarget, shop: allowedShop, subscriptionBillingAttemptId: "gid://shopify/SubscriptionBillingAttempt/40" },
     ],
   });
   const response = await handleAdministrativeBillingReconciliationLive(request(), s.dependencies);

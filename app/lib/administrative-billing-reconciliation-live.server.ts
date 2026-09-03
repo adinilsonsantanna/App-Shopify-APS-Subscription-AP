@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { ADMINISTRATIVE_RECONCILIATION_QUERY } from "./administrative-billing-reconciliation.server";
 import { ADMIN_LIVE_CONFIRMATION_PHRASE } from "./billing-reconciliation-live";
+import { isAdministrativeReconciliationShopAllowed } from "./administrative-reconciliation-allowlist.server";
 
 type Admin = { graphql(query: string, options: { variables: Record<string, unknown> }): Promise<Response> };
 type Authenticated = { admin: Admin; session: { shop: string } };
@@ -118,6 +119,7 @@ export async function handleAdministrativeBillingReconciliationLive(request: Req
     return jsonError(503, "shopify_authentication_unavailable", dependencies.requestId);
   }
   const shop = authenticated.session.shop.toLowerCase();
+  if (!isAdministrativeReconciliationShopAllowed(shop)) return jsonError(404, "not_found", dependencies.requestId);
 
   let input: Record<string, unknown>;
   try { input = await readLiveJsonBody(request); }
