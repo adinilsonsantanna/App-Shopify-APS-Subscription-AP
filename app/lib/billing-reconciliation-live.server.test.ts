@@ -78,6 +78,19 @@ test("non-2xx response surfaces status, body and reconciliation error", async ()
   assert.deepEqual(outcome.body, { error: "target_not_authorized", requestId: "r1" });
 });
 
+test("browser body excludes target keys not in allowlist even when runtime target carries them", async () => {
+  const pollutedTarget = { ...target, shop: "one.myshopify.com", __sentinel_runtime_extra: true } as typeof target & { shop: string; __sentinel_runtime_extra: boolean };
+  const s = setup({ target: pollutedTarget });
+  await submitBillingReconciliationLive(s.deps);
+  assert.equal(s.sent.length, 1);
+  const body = JSON.parse(s.sent[0].body as string);
+  const keys = Object.keys(body).sort();
+  assert.deepEqual(keys, ["confirmation", "correlationId", "cycleOriginTime", "shopifyOrderId", "subscriptionBillingAttemptId", "subscriptionContractId"]);
+  assert.equal("shop" in body, false);
+  assert.equal("__sentinel_runtime_extra" in body, false);
+  assert.equal(body.confirmation, "EXECUTAR RECONCILIAÇÃO LIVE");
+});
+
 test("non-JSON error response is sanitized to null body", async () => {
   const s = setup({}, { response: new Response("<html>oops</html>", { status: 500 }) });
   const outcome = await submitBillingReconciliationLive(s.deps);

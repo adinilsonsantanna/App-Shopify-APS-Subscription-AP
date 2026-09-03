@@ -64,7 +64,11 @@ export async function submitBillingReconciliationLive(
         authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
-        ...dependencies.target,
+        subscriptionContractId: dependencies.target.subscriptionContractId,
+        subscriptionBillingAttemptId: dependencies.target.subscriptionBillingAttemptId,
+        shopifyOrderId: dependencies.target.shopifyOrderId,
+        cycleOriginTime: dependencies.target.cycleOriginTime,
+        correlationId: dependencies.target.correlationId,
         confirmation: dependencies.confirmation,
       }),
     });

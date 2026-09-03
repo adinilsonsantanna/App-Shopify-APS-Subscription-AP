@@ -201,6 +201,8 @@ test("valid live emits exactly one Central call with dryRun false and live secre
   assert.equal(body.completedAt, "2026-08-27T17:28:45Z");
   assert.equal(body.orderProcessedAt, "2026-08-27T17:28:51.161Z");
   assert.equal(body.correlationId, liveTarget.correlationId);
+  assert.equal(s.graphqlCalls, 1);
+  assert.equal(s.centralCalls.length, 1);
 });
 
 test("browser cannot set dryRun; unexpected fields fail closed", async () => {
@@ -296,6 +298,7 @@ test("outbound Central body has exactly 16 keys and never includes confirmation"
   const body = JSON.parse(init.body);
   assert.equal(Object.keys(body).length, 16);
   assert.equal("confirmation" in body, false);
+  assert.equal("__sentinel_runtime_extra" in body, false);
   for (const value of Object.values(body)) assert.notEqual(typeof value, "undefined");
 });
 
@@ -349,4 +352,44 @@ test("post-Central log includes sanitized centralRequestId when present and omit
   const entryNoId = JSON.stringify(withoutId.logs);
   assert.equal(entryNoId.includes("central_live_response"), true);
   assert.equal(entryNoId.includes("centralRequestId"), false);
+});
+
+test("body with shop field is rejected fail-closed with no authentication or Central call", async () => {
+  const s = setup();
+  const bodyWithShop = { ...payload, shop: liveTarget.shop };
+  const response = await handleAdministrativeBillingReconciliationLive(request(bodyWithShop), s.dependencies);
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: "unexpected_field", requestId: "req-test-123" });
+  assert.equal(s.graphqlCalls, 0);
+  assert.equal(s.centralCalls.length, 0);
+});
+
+test("body shop never controls identity; session.shop selects and authorizes target", async () => {
+  const s = setup({
+    authenticate: async () => ({
+      session: { shop: "two.myshopify.com", accessToken: "never-forward" },
+      admin: {
+        graphql: async () => {
+          assert.fail("GraphQL should not be called: shop_not_authorized");
+          return Response.json({ data: {} });
+        },
+      },
+    }),
+    liveTargets: [
+      { ...liveTarget, shop: "one.myshopify.com" },
+      { ...liveTarget, shop: "two.myshopify.com", subscriptionBillingAttemptId: "gid://shopify/SubscriptionBillingAttempt/40" },
+    ],
+  });
+  const response = await handleAdministrativeBillingReconciliationLive(request(), s.dependencies);
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { error: "target_not_authorized", requestId: "req-test-123" });
+  assert.equal(s.graphqlCalls, 0);
+  assert.equal(s.centralCalls.length, 0);
+});
+
+test("explicit body keys match allowedInputKeys exactly: shop absent, confirmation present", async () => {
+  const allowedInputKeys = ["confirmation", "correlationId", "cycleOriginTime", "shopifyOrderId", "subscriptionBillingAttemptId", "subscriptionContractId"].sort();
+  const bodyKeys = Object.keys(payload).sort();
+  assert.deepEqual(bodyKeys, allowedInputKeys);
+  assert.equal("shop" in payload, false);
 });
