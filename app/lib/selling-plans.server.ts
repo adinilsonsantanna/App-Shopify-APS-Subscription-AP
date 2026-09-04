@@ -1,4 +1,13 @@
 const APS_MERCHANT_CODE = "aps-subscription";
+
+// Tamanhos de página e proteções defensivas. São limites técnicos de chunk,
+// NÃO limites de resultado: a paginação percorre todas as páginas até esgotar.
+const PRODUCTS_PAGE_SIZE = 50;
+const GROUPS_PAGE_SIZE = 20;
+const PLANS_PAGE_SIZE = 50;
+// Proteção contra loop infinito em caso de cursor que nunca avança ou resposta
+// malformada da API. Documentado como salvaguarda, não como teto de resultado.
+const MAX_PAGES = 1_000;
 const BADGE_METAFIELD_NAMESPACE = "aps_subscription";
 const BADGE_METAFIELD_KEY = "badge_selling_plan_id";
 
@@ -37,18 +46,29 @@ type RawProduct = {
   id: string;
   title: string;
   featuredMedia?: { preview?: { image?: { url: string; altText: string | null } | null } | null } | null;
-  sellingPlanGroups: { nodes: RawGroup[] };
+  sellingPlanGroups?: { nodes: RawGroup[] };
   badgeSellingPlan?: { value: string } | null;
 };
 
-type ProductsQuery = {
+type PageInfo = {
+  hasNextPage: boolean;
+  endCursor: string | null;
+};
+
+type ProductsPage = {
   currentAppInstallation: { app: { id: string } };
-  products: { nodes: RawProduct[] };
+  products: { nodes: RawProduct[]; pageInfo: PageInfo };
 };
 
 type ProductQuery = {
   currentAppInstallation: { app: { id: string } };
   product: RawProduct | null;
+};
+
+type ProductGroupsPage = {
+  product: {
+    sellingPlanGroups: { nodes: RawGroup[]; pageInfo: PageInfo };
+  } | null;
 };
 
 type MutationResult = {
@@ -97,6 +117,7 @@ export type SubscriptionProduct = {
   image: { url: string; altText: string | null } | null;
   groups: SellingPlanGroup[];
   badgeSellingPlanId: string | null;
+  totalSellingPlans: number;
 };
 
 const PLAN_FIELDS = `#graphql
@@ -169,12 +190,20 @@ function mapPlan(plan: RawPlan): SellingPlan {
 }
 
 function mapGroup(group: RawGroup): SellingPlanGroup {
+  const seenPlans = new Set<string>();
+  const sellingPlans = group.sellingPlans.nodes
+    .filter((plan) => {
+      if (seenPlans.has(plan.id)) return false;
+      seenPlans.add(plan.id);
+      return true;
+    })
+    .map(mapPlan);
   return {
     id: group.id,
     name: group.name,
     merchantCode: group.merchantCode,
     appId: group.appId ?? null,
-    sellingPlans: group.sellingPlans.nodes.map(mapPlan),
+    sellingPlans,
   };
 }
 
@@ -190,48 +219,102 @@ function isOwnedApsGroup(group: RawGroup, currentAppId: string) {
   );
 }
 
-export async function listSubscriptionProducts(
+function assertCursorAdvanced(operation: string, cursor: string | null, endCursor: string | null) {
+  if (!endCursor || endCursor === cursor) {
+    throw new Error(
+      `[Selling Plans] ${operation}: paginação não avançou; encerrando para evitar loop infinito.`,
+    );
+  }
+}
+
+async function collectOwnedGroups(
   admin: AdminGraphqlClient,
-  search = "",
-): Promise<SubscriptionProduct[]> {
-  const data = await executeGraphql<ProductsQuery>(admin, "ListProducts", `#graphql
-    ${PLAN_FIELDS}
-    query ApsSubscriptionProducts($query: String) {
-      currentAppInstallation { app { id } }
-      products(first: 25, sortKey: TITLE, query: $query) {
-        nodes {
-          id
-          title
-          featuredMedia { preview { image { url altText } } }
-          sellingPlanGroups(first: 2) {
+  productId: string,
+  appId: string,
+): Promise<SellingPlanGroup[]> {
+  const groups: SellingPlanGroup[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const data: ProductGroupsPage = await executeGraphql<ProductGroupsPage>(admin, "ListProductGroups", `#graphql
+      ${PLAN_FIELDS}
+      query ApsProductSellingPlanGroups($id: ID!, $cursor: String) {
+        product(id: $id) {
+          sellingPlanGroups(first: ${GROUPS_PAGE_SIZE}, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
             nodes {
               id name merchantCode appId
-              sellingPlans(first: 10) { nodes { ...ApsSellingPlanFields } }
+              sellingPlans(first: ${PLANS_PAGE_SIZE}) { nodes { ...ApsSellingPlanFields } }
             }
           }
         }
       }
-    }
-  `, { query: search || null });
+    `, { id: productId, cursor });
 
-  const appId = data.currentAppInstallation.app.id as string;
-  return data.products.nodes
-    .map((product): SubscriptionProduct => {
-      const groups = product.sellingPlanGroups.nodes
-        .filter((group) => isOwnedApsGroup(group, appId))
-        .map(mapGroup);
-      return {
-        id: product.id,
-        numericId: product.id.split("/").pop()!,
-        title: product.title,
-        image: product.featuredMedia?.preview?.image ?? null,
+    if (!data.product) break;
+    for (const group of data.product.sellingPlanGroups.nodes) {
+      if (isOwnedApsGroup(group, appId)) groups.push(mapGroup(group));
+    }
+    if (!data.product.sellingPlanGroups.pageInfo.hasNextPage) break;
+    const endCursor: string | null = data.product.sellingPlanGroups.pageInfo.endCursor;
+    assertCursorAdvanced("ListProductGroups", cursor, endCursor);
+    cursor = endCursor;
+  }
+  return groups;
+}
+
+export async function listSubscriptionProducts(
+  admin: AdminGraphqlClient,
+  search = "",
+): Promise<SubscriptionProduct[]> {
+  const products: SubscriptionProduct[] = [];
+  let appId: string | null = null;
+  let cursor: string | null = null;
+
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const data: ProductsPage = await executeGraphql<ProductsPage>(admin, "ListProducts", `#graphql
+      query ApsSubscriptionProducts($query: String, $cursor: String) {
+        currentAppInstallation { app { id } }
+        products(first: ${PRODUCTS_PAGE_SIZE}, after: $cursor, sortKey: TITLE, query: $query) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            title
+            featuredMedia { preview { image { url altText } } }
+          }
+        }
+      }
+    `, { query: search || null, cursor });
+
+    appId = data.currentAppInstallation.app.id as string;
+
+    for (const raw of data.products.nodes) {
+      const groups = await collectOwnedGroups(admin, raw.id, appId);
+      // Lista padrão (sem busca): apenas produtos realmente vinculados a
+      // Selling Plans gerenciados pelo app. Busca explícita varre o catálogo
+      // inteiro para permitir adicionar um produto ao gerenciador.
+      if (search.length === 0 && groups.length === 0) continue;
+      const planIds = new Set<string>();
+      for (const group of groups) {
+        for (const plan of group.sellingPlans) planIds.add(plan.id);
+      }
+      products.push({
+        id: raw.id,
+        numericId: raw.id.split("/").pop()!,
+        title: raw.title,
+        image: raw.featuredMedia?.preview?.image ?? null,
         groups,
         badgeSellingPlanId: null,
-      };
-    })
-    .filter((product: SubscriptionProduct) => search.length > 0 ||
-      product.title.toLocaleLowerCase("pt-BR").includes("assinatura") || product.groups.length > 0,
-    );
+        totalSellingPlans: planIds.size,
+      });
+    }
+
+    if (!data.products.pageInfo.hasNextPage) break;
+    const endCursor: string | null = data.products.pageInfo.endCursor;
+    assertCursorAdvanced("ListProducts", cursor, endCursor);
+    cursor = endCursor;
+  }
+
+  return products;
 }
 
 export async function getSubscriptionProduct(admin: AdminGraphqlClient, productId: string): Promise<SubscriptionProduct> {
@@ -257,9 +340,12 @@ export async function getSubscriptionProduct(admin: AdminGraphqlClient, productI
   `, { id: productId });
   if (!data.product) throw new Error("Produto não encontrado na Shopify.");
   const appId = data.currentAppInstallation.app.id;
-  const groups = data.product.sellingPlanGroups.nodes
+  const groups = (data.product.sellingPlanGroups?.nodes ?? [])
     .filter((group) => isOwnedApsGroup(group, appId))
     .map(mapGroup);
+  const totalSellingPlans = new Set(
+    groups.flatMap((group) => group.sellingPlans.map((plan) => plan.id)),
+  ).size;
   return {
     id: data.product.id,
     numericId: data.product.id.split("/").pop(),
@@ -267,6 +353,7 @@ export async function getSubscriptionProduct(admin: AdminGraphqlClient, productI
     image: data.product.featuredMedia?.preview?.image ?? null,
     groups,
     badgeSellingPlanId: data.product.badgeSellingPlan?.value ?? null,
+    totalSellingPlans,
   } as SubscriptionProduct;
 }
 

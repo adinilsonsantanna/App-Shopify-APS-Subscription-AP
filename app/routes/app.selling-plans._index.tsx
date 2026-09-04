@@ -54,7 +54,7 @@ export default function SellingPlansIndex() {
                     </s-stack>
                   </s-table-cell>
                   <s-table-cell>{product.numericId}</s-table-cell>
-                  <s-table-cell>{product.groups.reduce((total, group) => total + group.sellingPlans.length, 0)}</s-table-cell>
+                  <s-table-cell>{product.totalSellingPlans}</s-table-cell>
                   <s-table-cell>
                     <s-button href={`/app/selling-plans/${product.numericId}`}>
                       {product.groups.length > 0 ? "Gerenciar planos" : "Adicionar ao gerenciador"}
