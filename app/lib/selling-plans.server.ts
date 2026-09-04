@@ -5,6 +5,9 @@ const APS_MERCHANT_CODE = "aps-subscription";
 const PRODUCTS_PAGE_SIZE = 50;
 const GROUPS_PAGE_SIZE = 20;
 const PLANS_PAGE_SIZE = 50;
+const ROOT_GROUPS_PAGE_SIZE = 100;
+const GROUP_PRODUCTS_PAGE_SIZE = 50;
+const GROUP_PLANS_PAGE_SIZE = 100;
 // Proteção contra loop infinito em caso de cursor que nunca avança ou resposta
 // malformada da API. Documentado como salvaguarda, não como teto de resultado.
 const MAX_PAGES = 1_000;
@@ -58,6 +61,30 @@ type PageInfo = {
 type ProductsPage = {
   currentAppInstallation: { app: { id: string } };
   products: { nodes: RawProduct[]; pageInfo: PageInfo };
+};
+
+type RootGroupsPage = {
+  currentAppInstallation: { app: { id: string } };
+  sellingPlanGroups: { nodes: RawGroup[]; pageInfo: PageInfo };
+};
+
+type GroupPlansQuery = {
+  sellingPlanGroup: {
+    sellingPlans: { nodes: RawPlan[]; pageInfo: PageInfo };
+  } | null;
+};
+
+type GroupProductsQuery = {
+  sellingPlanGroup: {
+    products: {
+      nodes: Array<{
+        id: string;
+        title: string;
+        featuredMedia?: { preview?: { image?: { url: string; altText: string | null } | null } | null } | null;
+      }>;
+      pageInfo: PageInfo;
+    };
+  } | null;
 };
 
 type ProductQuery = {
@@ -262,9 +289,180 @@ async function collectOwnedGroups(
   return groups;
 }
 
+async function collectGroupPlans(
+  admin: AdminGraphqlClient,
+  groupId: string,
+): Promise<SellingPlan[]> {
+  const plans: RawPlan[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const data: GroupPlansQuery = await executeGraphql<GroupPlansQuery>(admin, "ListGroupPlans", `#graphql
+      ${PLAN_FIELDS}
+      query ApsGroupSellingPlans($id: ID!, $cursor: String) {
+        sellingPlanGroup(id: $id) {
+          sellingPlans(first: ${GROUP_PLANS_PAGE_SIZE}, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes { ...ApsSellingPlanFields }
+          }
+        }
+      }
+    `, { id: groupId, cursor });
+
+    if (!data.sellingPlanGroup) break;
+    plans.push(...data.sellingPlanGroup.sellingPlans.nodes);
+    if (!data.sellingPlanGroup.sellingPlans.pageInfo.hasNextPage) break;
+    const endCursor: string | null = data.sellingPlanGroup.sellingPlans.pageInfo.endCursor;
+    assertCursorAdvanced("ListGroupPlans", cursor, endCursor);
+    cursor = endCursor;
+  }
+  const seenPlans = new Set<string>();
+  return plans
+    .filter((plan) => {
+      if (seenPlans.has(plan.id)) return false;
+      seenPlans.add(plan.id);
+      return true;
+    })
+    .map(mapPlan);
+}
+
+async function collectGroupProducts(
+  admin: AdminGraphqlClient,
+  groupId: string,
+): Promise<Array<{ id: string; title: string; image: { url: string; altText: string | null } | null }>> {
+  const products: Array<{
+    id: string;
+    title: string;
+    image: { url: string; altText: string | null } | null;
+  }> = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const data: GroupProductsQuery = await executeGraphql<GroupProductsQuery>(admin, "ListGroupProducts", `#graphql
+      query ApsSellingPlanGroupProducts($id: ID!, $cursor: String) {
+        sellingPlanGroup(id: $id) {
+          products(first: ${GROUP_PRODUCTS_PAGE_SIZE}, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              id
+              title
+              featuredMedia { preview { image { url altText } } }
+            }
+          }
+        }
+      }
+    `, { id: groupId, cursor });
+
+    if (!data.sellingPlanGroup) break;
+    for (const product of data.sellingPlanGroup.products.nodes) {
+      products.push({
+        id: product.id,
+        title: product.title,
+        image: product.featuredMedia?.preview?.image ?? null,
+      });
+    }
+    if (!data.sellingPlanGroup.products.pageInfo.hasNextPage) break;
+    const endCursor: string | null = data.sellingPlanGroup.products.pageInfo.endCursor;
+    assertCursorAdvanced("ListGroupProducts", cursor, endCursor);
+    cursor = endCursor;
+  }
+  return products;
+}
+
+async function listGroupSubscriptionProducts(
+  admin: AdminGraphqlClient,
+): Promise<SubscriptionProduct[]> {
+  // Caminho otimizado (abertura padrão): parte dos Selling Plan Groups do app
+  // no QueryRoot em vez de varrer o catálogo de produtos. O custo em chamadas de
+  // API depende do número de assinaturas, NÃO do tamanho do catálogo.
+  const products = new Map<
+    string,
+    {
+      id: string;
+      numericId: string;
+      title: string;
+      image: { url: string; altText: string | null } | null;
+      groups: SellingPlanGroup[];
+    }
+  >();
+  let appId: string | null = null;
+  let cursor: string | null = null;
+
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const data: RootGroupsPage = await executeGraphql<RootGroupsPage>(admin, "ListRootSellingPlanGroups", `#graphql
+      query ApsRootSellingPlanGroups($cursor: String) {
+        currentAppInstallation { app { id } }
+        sellingPlanGroups(first: ${ROOT_GROUPS_PAGE_SIZE}, after: $cursor, sortKey: ID) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id name merchantCode appId
+          }
+        }
+      }
+    `, { cursor });
+
+    appId = data.currentAppInstallation.app.id as string;
+
+    for (const raw of data.sellingPlanGroups.nodes) {
+      if (!isOwnedApsGroup(raw, appId)) continue;
+      const group: SellingPlanGroup = {
+        id: raw.id,
+        name: raw.name,
+        merchantCode: raw.merchantCode,
+        appId: raw.appId ?? null,
+        sellingPlans: await collectGroupPlans(admin, raw.id),
+      };
+      for (const product of await collectGroupProducts(admin, raw.id)) {
+        let entry = products.get(product.id);
+        if (!entry) {
+          entry = {
+            id: product.id,
+            numericId: product.id.split("/").pop()!,
+            title: product.title,
+            image: product.image,
+            groups: [],
+          };
+          products.set(product.id, entry);
+        }
+        entry.groups.push(group);
+      }
+    }
+
+    if (!data.sellingPlanGroups.pageInfo.hasNextPage) break;
+    const endCursor: string | null = data.sellingPlanGroups.pageInfo.endCursor;
+    assertCursorAdvanced("ListRootSellingPlanGroups", cursor, endCursor);
+    cursor = endCursor;
+  }
+
+  const result: SubscriptionProduct[] = [];
+  for (const product of products.values()) {
+    const planIds = new Set<string>();
+    for (const group of product.groups) {
+      for (const plan of group.sellingPlans) planIds.add(plan.id);
+    }
+    result.push({
+      ...product,
+      groups: product.groups,
+      badgeSellingPlanId: null,
+      totalSellingPlans: planIds.size,
+    });
+  }
+  return result.sort((a, b) => a.title.localeCompare(b.title, "pt-BR"));
+}
+
 export async function listSubscriptionProducts(
   admin: AdminGraphqlClient,
   search = "",
+): Promise<SubscriptionProduct[]> {
+  // Busca explícita varre o catálogo (produto pode ainda não ter plano).
+  // Lista padrão usa o caminho otimizado por grupos, sem percorrer o catálogo.
+  if (search.trim().length > 0) {
+    return searchCatalogProducts(admin, search);
+  }
+  return listGroupSubscriptionProducts(admin);
+}
+
+async function searchCatalogProducts(
+  admin: AdminGraphqlClient,
+  search: string,
 ): Promise<SubscriptionProduct[]> {
   const products: SubscriptionProduct[] = [];
   let appId: string | null = null;
@@ -283,16 +481,12 @@ export async function listSubscriptionProducts(
           }
         }
       }
-    `, { query: search || null, cursor });
+    `, { query: search, cursor });
 
     appId = data.currentAppInstallation.app.id as string;
 
     for (const raw of data.products.nodes) {
       const groups = await collectOwnedGroups(admin, raw.id, appId);
-      // Lista padrão (sem busca): apenas produtos realmente vinculados a
-      // Selling Plans gerenciados pelo app. Busca explícita varre o catálogo
-      // inteiro para permitir adicionar um produto ao gerenciador.
-      if (search.length === 0 && groups.length === 0) continue;
       const planIds = new Set<string>();
       for (const group of groups) {
         for (const plan of group.sellingPlans) planIds.add(plan.id);
