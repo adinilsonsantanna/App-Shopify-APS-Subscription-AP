@@ -50,6 +50,17 @@ const PLAN_FIELDS_RENDER = {
   ],
 };
 
+function renderPlan(plan: FixturePlan): unknown {
+  return {
+    id: plan.id,
+    name: plan.name,
+    options: PLAN_FIELDS_RENDER.options,
+    billingPolicy: PLAN_FIELDS_RENDER.billingPolicy,
+    deliveryPolicy: PLAN_FIELDS_RENDER.deliveryPolicy,
+    pricingPolicies: PLAN_FIELDS_RENDER.pricingPolicies,
+  };
+}
+
 function renderGroup(group: FixtureGroup): unknown {
   return {
     id: group.id,
@@ -57,14 +68,7 @@ function renderGroup(group: FixtureGroup): unknown {
     merchantCode: group.merchantCode,
     appId: group.appId ?? null,
     sellingPlans: {
-      nodes: group.plans.map((plan) => ({
-        id: plan.id,
-        name: plan.name,
-        options: PLAN_FIELDS_RENDER.options,
-        billingPolicy: PLAN_FIELDS_RENDER.billingPolicy,
-        deliveryPolicy: PLAN_FIELDS_RENDER.deliveryPolicy,
-        pricingPolicies: PLAN_FIELDS_RENDER.pricingPolicies,
-      })),
+      nodes: group.plans.map(renderPlan),
     },
   };
 }
@@ -94,9 +98,32 @@ function slicePage<T>(items: T[], cursor: string | null, pageSize: number) {
   };
 }
 
+function collectGroupIndex(products: FixtureProduct[]) {
+  const byGroup = new Map<string, FixtureProduct[]>();
+  const groupDefs = new Map<string, FixtureGroup>();
+  for (const p of products) {
+    for (const g of p.groups) {
+      if (!groupDefs.has(g.id)) groupDefs.set(g.id, g);
+      const list = byGroup.get(g.id) ?? [];
+      list.push(p);
+      byGroup.set(g.id, list);
+    }
+  }
+  return { byGroup, groupDefs };
+}
+
 function makeAdmin(
   products: FixtureProduct[],
-  opts: { groupsPageSize?: number; stuckProductsCursor?: boolean } = {},
+  opts: {
+    groupsPageSize?: number;
+    rootGroupsPageSize?: number;
+    groupProductsPageSize?: number;
+    groupPlansPageSize?: number;
+    stuckProductsCursor?: boolean;
+    stuckRootGroupsCursor?: boolean;
+    stuckGroupProductsCursor?: boolean;
+    failRootGroups?: boolean;
+  } = {},
 ): AdminMock {
   const calls: AdminMock["calls"] = [];
   const searchable = products.map((p) => p);
@@ -107,6 +134,71 @@ function makeAdmin(
     calls.push({ query, variables: options?.variables });
     const variables = options?.variables ?? {};
     const cursor = (variables.cursor as string | null) ?? null;
+
+    if (query.includes("ApsRootSellingPlanGroups")) {
+      if (opts.failRootGroups) {
+        return new Response("boom", { status: 429 });
+      }
+      const groups = [...collectGroupIndex(searchable).groupDefs.values()];
+      const page = slicePage(groups, cursor, opts.rootGroupsPageSize ?? 100);
+      return Response.json({
+        data: {
+          currentAppInstallation: { app: { id: APP_ID } },
+          sellingPlanGroups: {
+            nodes: page.nodes.map((g) => ({
+              id: g.id,
+              name: g.name,
+              merchantCode: g.merchantCode,
+              appId: g.appId ?? null,
+            })),
+            pageInfo: opts.stuckRootGroupsCursor
+              ? { hasNextPage: true, endCursor: cursor }
+              : page.pageInfo,
+          },
+        },
+      });
+    }
+
+    if (query.includes("ApsSellingPlanGroupProducts")) {
+      const id = variables.id as string;
+      const idProducts = collectGroupIndex(searchable).byGroup.get(id) ?? [];
+      const page = slicePage(idProducts, cursor, opts.groupProductsPageSize ?? 50);
+      return Response.json({
+        data: {
+          sellingPlanGroup: {
+            products: {
+              nodes: page.nodes.map((p) => ({
+                id: p.id,
+                title: p.title,
+                featuredMedia: null,
+              })),
+              pageInfo: opts.stuckGroupProductsCursor
+                ? { hasNextPage: true, endCursor: cursor }
+                : page.pageInfo,
+            },
+          },
+        },
+      });
+    }
+
+    if (query.includes("ApsGroupSellingPlans")) {
+      const id = variables.id as string;
+      const group = collectGroupIndex(searchable).groupDefs.get(id);
+      if (!group) {
+        return Response.json({ data: { sellingPlanGroup: null } });
+      }
+      const page = slicePage(group.plans, cursor, opts.groupPlansPageSize ?? 100);
+      return Response.json({
+        data: {
+          sellingPlanGroup: {
+            sellingPlans: {
+              nodes: page.nodes.map(renderPlan),
+              pageInfo: page.pageInfo,
+            },
+          },
+        },
+      });
+    }
 
     if (query.includes("ApsSubscriptionProducts")) {
       const search = (variables.query as string | null) ?? "";
@@ -217,15 +309,17 @@ test("loja com 8 produtos vinculados mostra os 8 (sem teto fixo)", async () => {
   assert.equal(result.length, 8);
 });
 
-test("loja com mais de 50 produtos percorre múltiplas páginas", async () => {
+test("loja com mais de 50 produtos vinculados percorre múltiplas páginas de produtos do grupo", async () => {
   const products = Array.from({ length: 120 }, (_, i) =>
     productWithGroups(i + 1, [sampleGroupWithPlans()]),
   );
   const admin = makeAdmin(products);
   const result = await listSubscriptionProducts(admin);
   assert.equal(result.length, 120);
-  const listPages = admin.calls.filter((c) => c.query.includes("ApsSubscriptionProducts"));
-  assert.ok(listPages.length >= 3, `esperava 3 páginas, obteve ${listPages.length}`);
+  const groupProductPages = admin.calls.filter((c) => c.query.includes("ApsSellingPlanGroupProducts"));
+  assert.ok(groupProductPages.length >= 3, `esperava 3 páginas, obteve ${groupProductPages.length}`);
+  const catalogPages = admin.calls.filter((c) => c.query.includes("ApsSubscriptionProducts"));
+  assert.equal(catalogPages.length, 0, "abertura padrão não deve varrer o catálogo");
 });
 
 test("paginação de selling plan groups: produto com mais grupos que a página mantém todos", async () => {
@@ -237,21 +331,21 @@ test("paginação de selling plan groups: produto com mais grupos que a página 
   assert.equal(result[0].totalSellingPlans, 25);
 });
 
-test("paginação dos produtos associados avança o cursor nas páginas seguintes", async () => {
+test("paginação dos produtos do grupo avança o cursor nas páginas seguintes", async () => {
   const products = Array.from({ length: 130 }, (_, i) =>
     productWithGroups(i + 1, [sampleGroupWithPlans()]),
   );
   const admin = makeAdmin(products);
   await listSubscriptionProducts(admin);
   const cursors = admin.calls
-    .filter((c) => c.query.includes("ApsSubscriptionProducts"))
+    .filter((c) => c.query.includes("ApsSellingPlanGroupProducts"))
     .map((c) => c.variables?.cursor);
   assert.deepEqual(cursors, [null, "50", "100"]);
 });
 
-test("cursor repetido falha de modo seguro (sem loop infinito)", async () => {
+test("cursor repetido nos produtos do grupo falha de modo seguro (sem loop infinito)", async () => {
   const products = [1, 2, 3].map((n) => productWithGroups(n, [sampleGroupWithPlans()]));
-  const admin = makeAdmin(products, { stuckProductsCursor: true });
+  const admin = makeAdmin(products, { stuckGroupProductsCursor: true });
   await assert.rejects(
     listSubscriptionProducts(admin),
     /paginação não avançou/,
@@ -427,4 +521,140 @@ test("excluir o último plano exclui o grupo (sem regressão)", async () => {
   };
   await deleteSellingPlan(admin, single, "gid://shopify/SellingPlan/1");
   assert.ok(admin.calls.some((c) => c.query.includes("ApsSellingPlanGroupDelete")));
+});
+
+test("custo da abertura padrão independe do tamanho do catálogo (500 produtos, 8 assinaturas)", async () => {
+  const products = Array.from({ length: 500 }, (_, i) =>
+    productWithGroups(i + 1, i < 8 ? [sampleGroupWithPlans()] : [], `Catálogo ${i}`),
+  );
+  const admin = makeAdmin(products);
+  const result = await listSubscriptionProducts(admin);
+  assert.equal(result.length, 8);
+  const catalogListCalls = admin.calls.filter((c) => c.query.includes("ApsSubscriptionProducts"));
+  assert.equal(catalogListCalls.length, 0, "catálogo não deve ser listado na abertura");
+  const perProductGroupCalls = admin.calls.filter((c) => c.query.includes("ApsProductSellingPlanGroups"));
+  assert.equal(perProductGroupCalls.length, 0, "nenhuma consulta por produto na abertura");
+  assert.ok(
+    admin.calls.length <= 8,
+    `checar 500 produtos custou ${admin.calls.length} chamadas; esperado ≤ 8`,
+  );
+});
+
+test("catálogo com milhares de produtos comuns (1 assinatura) custa poucas chamadas", async () => {
+  const products = Array.from({ length: 5000 }, (_, i) =>
+    productWithGroups(i + 1, i === 0 ? [sampleGroupWithPlans()] : [], `Genérico ${i}`),
+  );
+  const admin = makeAdmin(products);
+  const result = await listSubscriptionProducts(admin);
+  assert.equal(result.length, 1);
+  assert.ok(admin.calls.length <= 8, `obteve ${admin.calls.length} chamadas para 5000 produtos`);
+});
+
+test("paginação de selling plan groups no QueryRoot (mais de 100 grupos)", async () => {
+  const groups = Array.from({ length: 140 }, (_, i) =>
+    ownedGroup(`g${i + 1}`, [defaultPlan(String(i + 1), `Plano ${i + 1}`)]),
+  );
+  const admin = makeAdmin([productWithGroups(1, groups)]);
+  const result = await listSubscriptionProducts(admin);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].groups.length, 140);
+  const rootCursors = admin.calls
+    .filter((c) => c.query.includes("ApsRootSellingPlanGroups"))
+    .map((c) => c.variables?.cursor);
+  assert.deepEqual(rootCursors, [null, "100"]);
+});
+
+test("selling plans por grupo paginados (mais de 100 planos)", async () => {
+  const plans = Array.from({ length: 130 }, (_, i) => defaultPlan(String(i + 1), `Plano ${i + 1}`));
+  const admin = makeAdmin([productWithGroups(1, [ownedGroup("g1", plans)])]);
+  const result = await listSubscriptionProducts(admin);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].groups[0].sellingPlans.length, 130);
+  assert.equal(result[0].totalSellingPlans, 130);
+  const planCursors = admin.calls
+    .filter((c) => c.query.includes("ApsGroupSellingPlans"))
+    .map((c) => c.variables?.cursor);
+  assert.deepEqual(planCursors, [null, "100"]);
+});
+
+test("cursor repetido no QueryRoot falha de modo seguro", async () => {
+  const products = Array.from({ length: 150 }, (_, i) =>
+    productWithGroups(i + 1, [ownedGroup("g1", [defaultPlan("1", "Mensal")])]),
+  );
+  const admin = makeAdmin(products, { stuckRootGroupsCursor: true });
+  await assert.rejects(
+    listSubscriptionProducts(admin),
+    /paginação não avançou/,
+  );
+});
+
+test("lista padrão é ordenada por título (pt-BR)", async () => {
+  const admin = makeAdmin([
+    productWithGroups(3, [sampleGroupWithPlans()], "Beta"),
+    productWithGroups(1, [sampleGroupWithPlans()], "Água"),
+    productWithGroups(2, [sampleGroupWithPlans()], "alumina"),
+    productWithGroups(4, [sampleGroupWithPlans()], "Zebra"),
+  ]);
+  const result = await listSubscriptionProducts(admin);
+  assert.deepEqual(result.map((p) => p.numericId), ["1", "2", "3", "4"]);
+});
+
+test("lista padrão não inclui produto sem plano mesmo com catálogo grande", async () => {
+  const products = Array.from({ length: 300 }, (_, i) =>
+    productWithGroups(i + 1, [], `Comum ${i}`),
+  );
+  const admin = makeAdmin(products);
+  const result = await listSubscriptionProducts(admin);
+  assert.deepEqual(result, []);
+  assert.equal(admin.calls.length, 1, "só a página raiz de grupos é consultada");
+});
+
+test("abertura padrão consulta grupos raiz, não produtos", async () => {
+  const admin = makeAdmin([productWithGroups(1, [sampleGroupWithPlans()])]);
+  await listSubscriptionProducts(admin);
+  const operationNames = admin.calls.map((c) => {
+    if (c.query.includes("ApsRootSellingPlanGroups")) return "root";
+    if (c.query.includes("ApsSellingPlanGroupProducts")) return "group-products";
+    if (c.query.includes("ApsGroupSellingPlans")) return "group-plans";
+    return c.query.slice(0, 40);
+  });
+  assert.deepEqual(operationNames, ["root", "group-plans", "group-products"]);
+  assert.ok(admin.calls.every((c) => !c.query.includes("ApsSubscriptionProducts")));
+});
+
+test("busca retorna produto ainda sem plano (continua adicionável ao gerenciador)", async () => {
+  const admin = makeAdmin([
+    productWithGroups(1, [sampleGroupWithPlans()], "Produto Com Plano"),
+    productWithGroups(2, [], "Novo Sem Plano"),
+  ]);
+  const result = await listSubscriptionProducts(admin, "Sem Plano");
+  assert.equal(result.length, 1);
+  assert.equal(result[0].numericId, "2");
+  assert.deepEqual(result[0].groups, []);
+  assert.equal(result[0].totalSellingPlans, 0);
+});
+
+test("erro HTTP (429) propaga sem retry descontrolado", async () => {
+  const products = [1, 2, 3].map((n) => productWithGroups(n, [sampleGroupWithPlans()]));
+  const admin = makeAdmin(products, { failRootGroups: true });
+  await assert.rejects(
+    listSubscriptionProducts(admin),
+    /A Shopify não conseguiu processar a solicitação/,
+  );
+  const rootCalls = admin.calls.filter((c) => c.query.includes("ApsRootSellingPlanGroups"));
+  assert.equal(rootCalls.length, 1, "não deve repetir a chamada que falhou");
+});
+
+test("grupo atualizado depois da coleta inicial não escapa do dedupe por produto", async () => {
+  const shared: FixturePlan[] = [defaultPlan("1", "Mensal"), { id: "gid://shopify/SellingPlan/1", name: "Mensal (refetch)" }];
+  const admin = makeAdmin([
+    productWithGroups(1, [ownedGroup("a", shared)]),
+    productWithGroups(2, [ownedGroup("a", shared)]),
+  ]);
+  const result = await listSubscriptionProducts(admin);
+  assert.equal(result.length, 2);
+  for (const product of result) {
+    assert.equal(product.groups[0].sellingPlans.length, 1, "plano duplicado no grupo é deduplicado");
+    assert.equal(product.totalSellingPlans, 1);
+  }
 });
